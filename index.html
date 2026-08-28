@@ -6,11 +6,40 @@
   <meta name="theme-color" content="#0f766e" />
   <meta name="description" content="(주)원스포츠 힐스테이트 상도 센트럴파크 1단지 휘트니스센터 실시간 관리현황" />
   <title>원스포츠 휘트니스센터 관리현황</title>
-  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="manifest" href="/manifest.webmanifest?v=20260828-6" />
   <link rel="icon" href="/icons/favicon.png" type="image/png" />
   <link rel="apple-touch-icon" href="/icons/icon-192.png" />
-  <link rel="stylesheet" href="/assets/styles.css" />
-  <script src="/config.js"></script>
+  <link rel="stylesheet" href="/assets/styles.css?v=20260828-6" />
+  <script src="/config.js?v=20260828-6"></script>
+  <script>
+    (function () {
+      let pendingMessage = '';
+      function show(message) {
+        pendingMessage = message || '화면 스크립트를 불러오지 못했습니다.';
+        const render = function () {
+          const banner = document.getElementById('setupBanner');
+          if (!banner) return;
+          banner.className = 'setup-banner error';
+          banner.textContent = pendingMessage + ' 브라우저 새로고침 후에도 반복되면 /diagnostics.html을 확인해 주세요.';
+        };
+        if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', render, { once: true });
+        else render();
+      }
+      window.__onesportsBootFail = show;
+      window.addEventListener('error', function (event) {
+        if (event && event.message) show('자바스크립트 오류: ' + event.message);
+      });
+      window.addEventListener('unhandledrejection', function (event) {
+        const reason = event && event.reason;
+        show('초기화 오류: ' + (reason && reason.message ? reason.message : String(reason || '알 수 없는 오류')));
+      });
+      window.setTimeout(function () {
+        if (!document.documentElement.dataset.appReady) {
+          show('화면 초기화가 완료되지 않았습니다. 배포 파일 또는 캐시 상태를 확인해 주세요.');
+        }
+      }, 22000);
+    }());
+  </script>
 </head>
 <body class="viewer-page">
   <div id="setupBanner" class="setup-banner hidden" role="status"></div>
@@ -253,6 +282,6 @@
   </div>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script type="module" src="/assets/viewer.js"></script>
+  <script type="module" src="/assets/viewer.js?v=20260828-6" onerror="window.__onesportsBootFail('메인 스크립트 파일을 불러오지 못했습니다.')"></script>
 </body>
 </html>

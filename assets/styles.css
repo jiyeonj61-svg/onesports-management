@@ -887,3 +887,4 @@ img { display: block; max-width: 100%; }
   .mobile-nav { grid-template-columns: repeat(6, 1fr); }
   .mobile-tab { font-size: 8px; }
 }
+.live-indicator.demo i { background: var(--warning); box-shadow: 0 0 0 4px rgba(217, 148, 39, 0.14); }

@@ -197,9 +197,34 @@ function assertOperationalDate(value, label = '날짜') {
   return date;
 }
 
+function withTimeout(promise, milliseconds, message) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => window.setTimeout(() => reject(new Error(message)), milliseconds)),
+  ]);
+}
+
+async function loadSupabaseModule() {
+  const sources = [
+    'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm',
+    'https://esm.sh/@supabase/supabase-js@2',
+  ];
+  let lastError = null;
+  for (const source of sources) {
+    try {
+      return await withTimeout(import(source), 10000, 'Supabase 라이브러리 불러오기 시간 초과');
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error('Supabase 라이브러리를 불러오지 못했습니다.');
+}
+
 async function initSupabase(config) {
-  const module = await import('https://esm.sh/@supabase/supabase-js@2');
-  supabase = module.createClient(config.supabaseUrl, config.supabasePublishableKey, {
+  const module = await loadSupabaseModule();
+  const createClient = module.createClient || module.default?.createClient;
+  if (typeof createClient !== 'function') throw new Error('Supabase createClient 함수를 찾지 못했습니다.');
+  supabase = createClient(config.supabaseUrl.trim(), config.supabasePublishableKey.trim(), {
     auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
   });
 }
@@ -563,7 +588,10 @@ function subscribe(callback) {
   const handler = () => callback({ table: 'demo', status: 'SUBSCRIBED' });
   window.addEventListener('storage', handler);
   window.addEventListener('onesports-demo-change', handler);
-  queueMicrotask(handler);
+  queueMicrotask(() => {
+    callback({ table: 'connection', status: 'DEMO' });
+    handler();
+  });
   return () => {
     window.removeEventListener('storage', handler);
     window.removeEventListener('onesports-demo-change', handler);

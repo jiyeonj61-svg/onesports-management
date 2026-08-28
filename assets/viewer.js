@@ -576,11 +576,15 @@ async function bootstrap() {
 
   const live = $('#liveIndicator');
   const debouncedRefresh = debounce(refreshVisibleData, 180);
+  document.documentElement.dataset.appReady = 'true';
   data.subscribe((event) => {
     if (event.table === 'connection') {
       if (event.status === 'SUBSCRIBED') {
         live.className = 'live-indicator connected';
         live.querySelector('span').textContent = '실시간 연결됨';
+      } else if (event.status === 'DEMO') {
+        live.className = 'live-indicator demo';
+        live.querySelector('span').textContent = '데모 모드';
       } else if (event.status === 'CHANNEL_ERROR' || event.status === 'TIMED_OUT') {
         live.className = 'live-indicator error';
         live.querySelector('span').textContent = '연결 재시도 중';
@@ -593,6 +597,7 @@ async function bootstrap() {
 
 bootstrap().catch((error) => {
   console.error(error);
+  document.documentElement.dataset.appReady = 'error';
   const banner = $('#setupBanner');
   banner.className = 'setup-banner error';
   banner.textContent = `페이지 초기화 중 오류가 발생했습니다: ${error.message || '알 수 없는 오류'}`;

@@ -734,6 +734,9 @@ async function startAdminApp() {
       if (event.status === 'SUBSCRIBED') {
         indicator.className = 'live-indicator dark connected';
         indicator.querySelector('span').textContent = '실시간 연결됨';
+      } else if (event.status === 'DEMO') {
+        indicator.className = 'live-indicator dark demo';
+        indicator.querySelector('span').textContent = '데모 모드';
       } else if (event.status === 'CHANNEL_ERROR' || event.status === 'TIMED_OUT') {
         indicator.className = 'live-indicator dark error';
         indicator.querySelector('span').textContent = '재연결 중';
@@ -749,11 +752,13 @@ async function bootstrap() {
   bindEvents();
   state.connection = await data.init();
   renderMode(state.connection);
+  document.documentElement.dataset.appReady = 'true';
   const authorized = await authorizeCurrentSession();
   if (authorized) await startAdminApp();
 }
 
 bootstrap().catch((error) => {
   console.error(error);
+  document.documentElement.dataset.appReady = 'error';
   showLogin(`초기화 중 오류가 발생했습니다: ${error.message || '알 수 없는 오류'}`);
 });

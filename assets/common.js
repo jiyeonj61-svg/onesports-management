@@ -178,8 +178,7 @@ export function escapeHtml(value = '') {
 }
 
 export function nl2br(value = '') {
-  return escapeHtml(value).replace(/
-/g, '<br>');
+  return escapeHtml(value).replace(/\n/g, '<br>');
 }
 
 export function safeArray(value) {
@@ -262,9 +261,15 @@ export function debounce(fn, delay = 180) {
 }
 
 export function registerServiceWorker() {
-  if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
-    window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
-  }
+  if (!('serviceWorker' in navigator) || !location.protocol.startsWith('http')) return;
+  window.addEventListener('load', async () => {
+    try {
+      const registration = await navigator.serviceWorker.register('/sw.js?v=20260828-6', { updateViaCache: 'none' });
+      await registration.update();
+    } catch (error) {
+      console.warn('서비스워커 등록 실패:', error);
+    }
+  });
 }
 
 export function uuid() {

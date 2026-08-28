@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>원스포츠 연결 진단</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;background:#f4f7f8;color:#172126;font-family:Arial,'Malgun Gothic',sans-serif}.wrap{width:min(880px,calc(100% - 28px));margin:40px auto}.card{background:#fff;border:1px solid #dce5e8;border-radius:18px;padding:24px;box-shadow:0 12px 34px rgba(31,52,61,.08)}h1{margin:0 0 8px;font-size:28px}p{color:#66767c;line-height:1.65}.row{display:grid;grid-template-columns:200px 110px 1fr;gap:12px;padding:13px 0;border-top:1px solid #e8eef0;align-items:start}.row:first-of-type{margin-top:20px}.label{font-weight:800}.status{font-weight:800}.ok{color:#087a50}.fail{color:#bc2f2f}.wait{color:#986311}code{word-break:break-all;font-size:12px}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:20px}button,a{border:0;border-radius:10px;padding:11px 15px;font-weight:800;text-decoration:none;cursor:pointer}.primary{background:#0f766e;color:white}.soft{background:#eaf3f2;color:#0f766e}@media(max-width:640px){.row{grid-template-columns:1fr}.wrap{margin:18px auto}.card{padding:18px}}
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <section class="card">
+      <h1>원스포츠 앱 연결 진단</h1>
+      <p>배포 파일, Vercel 환경변수, Supabase REST 연결 상태를 순서대로 확인합니다.</p>
+      <div id="results"></div>
+      <div class="actions">
+        <button id="rerun" class="primary" type="button">다시 진단</button>
+        <a class="soft" href="/">열람 화면</a>
+        <a class="soft" href="/admin">관리자 화면</a>
+      </div>
+    </section>
+  </main>
+<script>
+const checks = [
+  ['공개 화면 스크립트','/assets/viewer.js?v=diag'],
+  ['관리자 스크립트','/assets/admin.js?v=diag'],
+  ['공통 모듈','/assets/common.js?v=diag'],
+  ['데이터 모듈','/assets/data.js?v=diag'],
+  ['스타일 파일','/assets/styles.css?v=diag'],
+];
+const results = document.getElementById('results');
+function row(label,status,detail,cls){
+  const el=document.createElement('div');
+  el.className='row';
+  el.innerHTML=`<div class="label">${label}</div><div class="status ${cls}">${status}</div><div><code>${String(detail||'')}</code></div>`;
+  results.appendChild(el);
+}
+async function fetchCheck(label,url){
+  try{
+    const response=await fetch(url,{cache:'no-store'});
+    row(label,response.ok?'정상':'실패',`${response.status} ${response.statusText} · ${url}`,response.ok?'ok':'fail');
+    return response.ok;
+  }catch(error){row(label,'실패',error.message,'fail');return false}
+}
+async function run(){
+  results.innerHTML='';
+  row('현재 주소','확인',location.origin,'wait');
+  for(const [label,url] of checks) await fetchCheck(label,url);
+  let config=null;
+  try{
+    const response=await fetch('/api/config?diag='+Date.now(),{cache:'no-store'});
+    const text=await response.text();
+    try{config=JSON.parse(text)}catch{}
+    if(!response.ok||!config){row('Vercel 설정 API','실패',`${response.status} · ${text.slice(0,160)}`,'fail')}
+    else if(!config.supabaseUrl||!config.supabasePublishableKey){row('Vercel 환경변수','실패','SUPABASE_URL 또는 SUPABASE_PUBLISHABLE_KEY 값이 비어 있습니다.','fail')}
+    else{row('Vercel 환경변수','정상',`${config.supabaseUrl} · Key 길이 ${config.supabasePublishableKey.length}`,'ok')}
+  }catch(error){row('Vercel 설정 API','실패',error.message,'fail')}
+  if(config?.supabaseUrl&&config?.supabasePublishableKey){
+    try{
+      const url=config.supabaseUrl.replace(/\/$/,'')+'/rest/v1/areas?select=id,name&limit=1';
+      const response=await fetch(url,{headers:{apikey:config.supabasePublishableKey,Authorization:'Bearer '+config.supabasePublishableKey},cache:'no-store'});
+      const text=await response.text();
+      row('Supabase areas 조회',response.ok?'정상':'실패',`${response.status} · ${text.slice(0,220)}`,response.ok?'ok':'fail');
+    }catch(error){row('Supabase areas 조회','실패',error.message,'fail')}
+  }
+  if('serviceWorker' in navigator){
+    const regs=await navigator.serviceWorker.getRegistrations();
+    row('서비스워커',regs.length?'등록됨':'없음',regs.length?regs.map(r=>r.scope).join(', '):'새 배포 주소에서는 처음에 없어도 정상입니다.',regs.length?'wait':'ok');
+  }
+}
+document.getElementById('rerun').addEventListener('click',run);
+run();
+</script>
+</body>
+</html>
