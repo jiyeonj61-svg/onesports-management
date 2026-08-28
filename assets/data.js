@@ -1,6 +1,6 @@
 import { APP_START_DATE, AREA_FALLBACK, appCurrentDate, safeArray, uuid } from './common.js';
 
-const DEMO_STORE_KEY = 'onesports-management-demo-v4';
+const DEMO_STORE_KEY = 'onesports-management-demo-v5';
 const DEMO_ADMIN_KEY = 'onesports-management-demo-admin';
 const PHOTO_BUCKET = 'management-photos';
 
@@ -59,35 +59,40 @@ async function fetchRuntimeConfig() {
   }
 }
 
+function defaultItemStatuses(area, partial = false) {
+  return Object.fromEntries((area?.checklist || []).map((item, index) => [item, partial && index === 0 ? 'issue' : 'normal']));
+}
+
 function generateDemoStore() {
   const today = appCurrentDate();
   const timestamp = nowIso();
   const inspections = [];
-  const amStatuses = ['normal', 'issue', 'normal', 'normal', 'normal', 'normal', 'normal', 'normal', 'normal'];
   AREA_FALLBACK.forEach((area, index) => {
     inspections.push({
       id: uuid(),
       inspection_date: today,
       period: 'AM',
       area_id: area.id,
-      status: amStatuses[index],
-      checked_items: area.checklist.slice(0, index === 1 ? 4 : area.checklist.length),
-      note: index === 1 ? '11번 러닝머신 화면 비율 확대 현상 확인. 제조사 디렉스 A/S 접수 완료.' : '',
+      status: index === 1 ? 'issue' : 'normal',
+      checked_items: area.checklist.slice(0, area.checklist.length),
+      item_statuses: defaultItemStatuses(area, index === 1),
+      note: index === 1 ? '11번 러닝머신 점검 중 화면 비율 이상 현상을 확인했습니다.' : '',
       photo_paths: [],
-      manager_name: index < 5 ? '센터장' : '오전 관리자',
+      manager_name: index < 6 ? '오전 관리자' : '센터장',
       created_at: timestamp,
       updated_at: timestamp,
     });
   });
-  AREA_FALLBACK.slice(0, 6).forEach((area, index) => {
+  AREA_FALLBACK.slice(0, 8).forEach((area, index) => {
     inspections.push({
       id: uuid(),
       inspection_date: today,
       period: 'PM',
       area_id: area.id,
-      status: index === 2 ? 'in_progress' : 'normal',
-      checked_items: area.checklist.slice(0, index === 2 ? 3 : area.checklist.length),
-      note: index === 2 ? '4번 타석 센서 연결 상태 점검 중입니다.' : '',
+      status: index === 3 ? 'in_progress' : 'normal',
+      checked_items: area.checklist.slice(0, area.checklist.length),
+      item_statuses: defaultItemStatuses(area, index === 3),
+      note: index === 3 ? '스크린골프장 1번 센서 반응을 추가 확인 중입니다.' : '',
       photo_paths: [],
       manager_name: '오후 관리자',
       created_at: timestamp,
@@ -96,7 +101,7 @@ function generateDemoStore() {
   });
 
   return {
-    version: 4,
+    version: 5,
     areas: deepClone(AREA_FALLBACK),
     inspections,
     issues: [
@@ -104,21 +109,47 @@ function generateDemoStore() {
         id: uuid(), category: 'facility', area_id: 2, title: '11번 러닝머신 화면 비율 확대',
         description: '셋톱박스 해체 후에도 화면 비율 확대 현상이 지속되어 제조사 확인이 필요합니다.',
         status: 'in_progress', priority: 'normal', received_date: today, due_date: '',
-        action_note: 'KT 셋톱박스 해체 후 미해결. 디렉스 A/S 접수 및 방문 일정 조율 중입니다.',
+        action_note: '디렉스 A/S 접수 및 방문 일정 조율 중입니다.',
         photo_paths: [], is_public: true, manager_name: '센터장', created_at: timestamp, updated_at: timestamp,
       },
       {
-        id: uuid(), category: 'complaint', area_id: 7, title: '여자 탈의실 드라이기 바람 세기 확인 요청',
-        description: '드라이기 한 대의 바람이 약하다는 이용자 의견이 접수되었습니다.',
+        id: uuid(), category: 'complaint', area_id: 11, title: '여자 탈의실 드라이기 점검 요청',
+        description: '드라이기 한 대의 바람 세기가 약하다는 이용자 의견이 접수되었습니다.',
         status: 'reviewing', priority: 'normal', received_date: today, due_date: '',
-        action_note: '관리자가 작동 상태를 확인하고 교체 여부를 검토 중입니다.',
+        action_note: '관리자가 작동 상태를 확인 중입니다.',
         photo_paths: [], is_public: true, manager_name: '센터장', created_at: timestamp, updated_at: timestamp,
       },
+    ],
+    inventories: [
       {
-        id: uuid(), category: 'cleaning', area_id: 8, title: '화장실 비누 디스펜서 보충',
-        description: '비누 잔량 부족 확인.', status: 'completed', priority: 'low', received_date: today, due_date: today,
-        action_note: '당일 즉시 보충 완료.', photo_paths: [], is_public: true, manager_name: '오전 관리자',
-        created_at: timestamp, updated_at: timestamp,
+        id: uuid(),
+        record_date: today,
+        area_id: 1,
+        category: 'equipment',
+        name: '로비 안내 배너',
+        quantity: '1개',
+        status: 'normal',
+        note: '정상 비치 중',
+        photo_paths: [],
+        is_public: true,
+        manager_name: '센터장',
+        created_at: timestamp,
+        updated_at: timestamp,
+      },
+      {
+        id: uuid(),
+        record_date: today,
+        area_id: 12,
+        category: 'supply',
+        name: '화장실 휴지',
+        quantity: '2박스',
+        status: 'low',
+        note: '오후 추가 보충 예정',
+        photo_paths: [],
+        is_public: true,
+        manager_name: '오전 관리자',
+        created_at: timestamp,
+        updated_at: timestamp,
       },
     ],
   };
@@ -131,10 +162,11 @@ function loadDemoStore() {
   } catch {
     store = null;
   }
-  if (!store || store.version !== 4) {
+  if (!store || store.version !== 5) {
     store = generateDemoStore();
     saveDemoStore(store);
   }
+  if (!Array.isArray(store.inventories)) store.inventories = [];
   return store;
 }
 
@@ -235,9 +267,10 @@ async function upsertInspection(payload) {
     area_id: Number(payload.area_id),
     status: payload.status,
     checked_items: safeArray(payload.checked_items),
+    item_statuses: payload.item_statuses || {},
     note: payload.note || '',
     photo_paths: safeArray(payload.photo_paths),
-    manager_name: payload.manager_name || '관리자',
+    manager_name: (payload.manager_name || '').trim(),
   };
   if (mode !== 'supabase') {
     const store = loadDemoStore();
@@ -310,7 +343,7 @@ async function saveIssue(payload) {
     action_note: payload.action_note?.trim() || '',
     photo_paths: safeArray(payload.photo_paths),
     is_public: payload.is_public !== false,
-    manager_name: payload.manager_name || '관리자',
+    manager_name: (payload.manager_name || '').trim(),
   };
   if (record.status === 'completed') record.completed_at = nowIso();
   else record.completed_at = null;
@@ -350,6 +383,76 @@ async function deleteIssue(id) {
     return;
   }
   const { error } = await supabase.from('issues').delete().eq('id', id);
+  if (error) throw error;
+}
+
+async function getInventories({ start, end } = {}) {
+  await init();
+  const range = normalizeDateRange(start, end);
+  if (range.empty) return [];
+  if (mode !== 'supabase') {
+    return deepClone(demoFilterDate(loadDemoStore().inventories, 'record_date', range.start, range.end))
+      .sort((a, b) => `${b.record_date}${b.created_at}`.localeCompare(`${a.record_date}${a.created_at}`));
+  }
+  const { data, error } = await supabase
+    .from('inventories')
+    .select('*')
+    .gte('record_date', range.start)
+    .lte('record_date', range.end)
+    .order('record_date', { ascending: false })
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+async function saveInventory(payload) {
+  await init();
+  const record = {
+    record_date: assertOperationalDate(payload.record_date, '기준일'),
+    area_id: payload.area_id ? Number(payload.area_id) : null,
+    category: payload.category || 'other',
+    name: payload.name.trim(),
+    quantity: payload.quantity?.trim() || '',
+    status: payload.status || 'normal',
+    note: payload.note?.trim() || '',
+    photo_paths: safeArray(payload.photo_paths),
+    is_public: payload.is_public !== false,
+    manager_name: (payload.manager_name || '').trim(),
+  };
+  if (mode !== 'supabase') {
+    const store = loadDemoStore();
+    const timestamp = nowIso();
+    if (payload.id) {
+      const index = store.inventories.findIndex((item) => item.id === payload.id);
+      if (index < 0) throw new Error('수정할 시설·비품 기록을 찾을 수 없습니다.');
+      store.inventories[index] = { ...store.inventories[index], ...record, updated_at: timestamp };
+      saveDemoStore(store);
+      return deepClone(store.inventories[index]);
+    }
+    const created = { id: uuid(), ...record, created_at: timestamp, updated_at: timestamp };
+    store.inventories.push(created);
+    saveDemoStore(store);
+    return deepClone(created);
+  }
+  if (payload.id) {
+    const { data, error } = await supabase.from('inventories').update(record).eq('id', payload.id).select().single();
+    if (error) throw error;
+    return data;
+  }
+  const { data, error } = await supabase.from('inventories').insert(record).select().single();
+  if (error) throw error;
+  return data;
+}
+
+async function deleteInventory(id) {
+  await init();
+  if (mode !== 'supabase') {
+    const store = loadDemoStore();
+    store.inventories = store.inventories.filter((item) => item.id !== id);
+    saveDemoStore(store);
+    return;
+  }
+  const { error } = await supabase.from('inventories').delete().eq('id', id);
   if (error) throw error;
 }
 
@@ -452,6 +555,7 @@ function subscribe(callback) {
       .channel(`onesports-management-${uuid()}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'inspections' }, (payload) => callback({ table: 'inspections', payload }))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'issues' }, (payload) => callback({ table: 'issues', payload }))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'inventories' }, (payload) => callback({ table: 'inventories', payload }))
       .subscribe((status) => callback({ table: 'connection', status }));
     return () => supabase.removeChannel(channel);
   }
@@ -476,6 +580,9 @@ export const data = {
   getIssues,
   saveIssue,
   deleteIssue,
+  getInventories,
+  saveInventory,
+  deleteInventory,
   uploadPhotos,
   resolvePhotoUrl,
   signIn,

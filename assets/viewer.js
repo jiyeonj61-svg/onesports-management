@@ -2,7 +2,6 @@ import { data } from './data.js';
 import {
   APP_START_DATE,
   APP_START_MONTH,
-  INSPECTION_STATUS,
   PERIOD_META,
   addDays,
   appCurrentDate,
@@ -16,8 +15,11 @@ import {
   formatKoreanDate,
   formatMonth,
   formatShortDate,
+  inventoryCategoryMeta,
+  inventoryStatusMeta,
   isOpenIssue,
   issueStatusMeta,
+  itemStatusMeta,
   monthKey,
   monthRange,
   nl2br,
@@ -40,6 +42,7 @@ const state = {
   dailyInspections: [],
   dailyIssues: [],
   allIssues: [],
+  allInventories: [],
   issueFilter: 'open',
   complaintFilter: 'open',
   activeTab: 'today',
@@ -54,69 +57,55 @@ function areaById(id) {
 
 function renderModeBanner(connection) {
   const banner = $('#setupBanner');
-  const live = $('#liveIndicator');
   if (connection.isDemo) {
     banner.classList.remove('hidden');
-    if (connection.configError) {
-      banner.classList.add('error');
-      banner.textContent = `${connection.configError} 현재 데모 데이터로 표시합니다.`;
-      live.className = 'live-indicator error';
-      live.querySelector('span').textContent = '연결 오류';
-    } else {
-      banner.classList.remove('error');
-      banner.textContent = '현재 데모 모드입니다. Supabase 연결 후 실제 관리자 입력 내용이 실시간으로 표시됩니다.';
-      live.className = 'live-indicator connected';
-      live.querySelector('span').textContent = '데모 데이터';
-    }
+    banner.className = connection.configError ? 'setup-banner error' : 'setup-banner';
+    banner.textContent = connection.configError
+      ? `${connection.configError} 열람 화면은 데모 데이터로 표시됩니다.`
+      : '현재 데모 모드입니다. 실시간 공유를 위해서는 Supabase 연결이 필요합니다.';
   } else {
     banner.classList.add('hidden');
-    live.className = 'live-indicator';
-    live.querySelector('span').textContent = '실시간 연결 중';
   }
 }
 
 function updateHeaderDate() {
-  const date = appCurrentDate();
-  $('#todayWeekday').textContent = weekdayLabel(date);
-  $('#todayLabel').textContent = formatKoreanDate(date, { weekday: false });
+  const today = appCurrentDate();
+  $('#todayLabel').textContent = formatKoreanDate(today, { weekday: false });
+  $('#todayWeekday').textContent = weekdayLabel(today);
 }
 
 function updateSelectedDateLabels() {
   state.selectedDate = clampAppDate(state.selectedDate);
-  const date = state.selectedDate;
   const maximum = appCurrentDate();
-  const picker = $('#datePicker');
-  $('#selectedDateLabel').textContent = formatKoreanDate(date, { weekday: false });
-  $('#selectedDateSub').textContent = `${weekdayLabel(date)} 관리기록`;
-  picker.min = APP_START_DATE;
-  picker.max = maximum;
-  picker.value = date;
-  $('#prevDay').disabled = date <= APP_START_DATE;
-  $('#nextDay').disabled = date >= maximum;
-  $('#goToday').classList.toggle('hidden', date === maximum);
+  $('#selectedDateLabel').textContent = formatKoreanDate(state.selectedDate, { weekday: false });
+  $('#selectedDateSub').textContent = weekdayLabel(state.selectedDate);
+  $('#datePicker').min = APP_START_DATE;
+  $('#datePicker').max = maximum;
+  $('#datePicker').value = state.selectedDate;
+  $('#prevDay').disabled = state.selectedDate <= APP_START_DATE;
+  $('#nextDay').disabled = state.selectedDate >= maximum;
+  $('#goToday').classList.toggle('hidden', state.selectedDate === maximum);
 }
 
 function renderDailySummary() {
   const total = state.areas.length * 2;
-  const completedInput = state.dailyInspections.length;
+  const recorded = state.dailyInspections.length;
   const normal = state.dailyInspections.filter((item) => item.status === 'normal' || item.status === 'completed').length;
   const attention = state.dailyInspections.filter((item) => item.status === 'issue' || item.status === 'in_progress').length;
-  const remaining = Math.max(total - completedInput, 0);
-  const percent = completionPercent(completedInput, total);
-
+  const remaining = Math.max(total - recorded, 0);
   $('#dailySummary').innerHTML = `
     <article class="summary-card success">
-      <span class="summary-label"><i class="summary-icon">%</i>점검 입력률</span>
-      <strong>${percent}<small>%</small></strong>
-      <p>${completedInput}건 입력 / 총 ${total}건</p>
+      <span class="summary-label"><i class="summary-icon">✓</i>입력 완료</span>
+      <strong>${recorded}<small>/${total}건</small></strong>
+      <p>해당 일자의 오전·오후 점검 입력 현황</p>
     </article>
     <article class="summary-card">
-      <span class="summary-label"><i class="summary-icon">✓</i>정상·조치완료</span>
+      <span class="summary-label"><i class="summary-icon">○</i>정상 관리</span>
       <strong>${normal}<small>건</small></strong>
-      <p>정상 ${state.dailyInspections.filter((item) => item.status === 'normal').length}건 · 완료 ${state.dailyInspections.filter((item) => item.status === 'completed').length}건</p>
+      <p>이상 없이 관리된 점검 수</p>
     </article>
     <article class="summary-card ${attention ? 'warning' : ''}">
-      <span class="summary-label"><i class="summary-icon">!</i>확인·조치 필요</span>
+      <span class="summary-label"><i class="summary-icon">!</i>확인·조치</span>
       <strong>${attention}<small>건</small></strong>
       <p>이상 발견 또는 현재 조치 중</p>
     </article>
@@ -132,11 +121,11 @@ function cellHtml(area, period, inspection) {
   const meta = statusMeta(inspection?.status);
   const checkedCount = safeArray(inspection?.checked_items).length;
   const sub = inspection
-    ? `${checkedCount}/${safeArray(area.checklist).length}개 항목 · ${inspection.manager_name || '관리자'}`
+    ? `${checkedCount}/${safeArray(area.checklist).length}개 항목 · ${inspection.manager_name || '-'}`
     : `${PERIOD_META[period].label} 관리기록 없음`;
   return `
     <button class="inspection-cell ${meta.className}" type="button"
-      data-inspection-id="${inspection?.id || ''}" data-area-id="${area.id}" data-period="${period}" data-period-label="${PERIOD_META[period].label}">
+      data-inspection-id="${inspection?.id || ''}" data-area-id="${area.id}" data-period="${period}">
       <span class="status-symbol">${meta.icon}</span>
       <span class="cell-copy"><strong>${meta.label}</strong><small>${escapeHtml(sub)}</small></span>
       <span class="cell-arrow">›</span>
@@ -167,6 +156,7 @@ function showInspectionDetail(areaId, period, inspectionId) {
   const inspection = state.dailyInspections.find((item) => item.id === inspectionId);
   const meta = statusMeta(inspection?.status);
   const checked = new Set(safeArray(inspection?.checked_items));
+  const itemStatuses = inspection?.item_statuses || {};
   const photos = safeArray(inspection?.photo_paths).map((path) => data.resolvePhotoUrl(path)).filter(Boolean);
 
   $('#detailModalContent').innerHTML = `
@@ -180,11 +170,12 @@ function showInspectionDetail(areaId, period, inspectionId) {
       <div><strong>${meta.label}</strong><small>${inspection ? '관리자가 입력한 점검 기록입니다.' : '아직 입력된 점검 기록이 없습니다.'}</small></div>
     </div>
     <section class="detail-section">
-      <h4>점검 항목</h4>
+      <h4>점검 항목별 상태</h4>
       <div class="detail-checklist">
-        ${safeArray(area?.checklist).map((item) => `
-          <div class="detail-check-item ${checked.has(item) ? 'checked' : ''}"><i>${checked.has(item) ? '✓' : '–'}</i><span>${escapeHtml(item)}</span></div>
-        `).join('')}
+        ${safeArray(area?.checklist).map((item) => {
+          const itemMeta = itemStatusMeta(itemStatuses[item] || (checked.has(item) ? 'normal' : 'unchecked'));
+          return `<div class="detail-check-item ${itemMeta.className}"><i>${itemMeta.icon}</i><span>${escapeHtml(item)}</span><b>${escapeHtml(itemMeta.label)}</b></div>`;
+        }).join('')}
       </div>
     </section>
     <section class="detail-section">
@@ -241,7 +232,7 @@ async function loadDaily() {
   }
 }
 
-function issueCardHtml(issue, editable = false) {
+function issueCardHtml(issue) {
   const category = categoryMeta(issue.category);
   const status = issueStatusMeta(issue.status);
   const priority = priorityMeta(issue.priority);
@@ -258,7 +249,6 @@ function issueCardHtml(issue, editable = false) {
           </div>
           <h3>${escapeHtml(issue.title)}</h3>
         </div>
-        ${editable ? `<button class="card-edit-button" type="button" data-edit-issue="${issue.id}">수정</button>` : ''}
       </div>
       <div class="issue-card-meta">
         <span>공간 ${escapeHtml(area?.name || '공통·기타')}</span>
@@ -270,7 +260,37 @@ function issueCardHtml(issue, editable = false) {
         ${issue.action_note ? `<div class="issue-action-box"><strong>조치 내용·진행 상황</strong><p>${nl2br(issue.action_note)}</p></div>` : ''}
         ${photos.length ? `<div class="photo-strip">${photos.map((url) => `<a class="photo-thumb" href="${escapeHtml(url)}" target="_blank" rel="noopener"><img src="${escapeHtml(url)}" alt="증빙 사진" /></a>`).join('')}</div>` : ''}
       </div>
-      <div class="issue-card-footer"><span>담당 ${escapeHtml(issue.manager_name || '관리자')}</span><span>최종 업데이트 ${escapeHtml(formatDateTime(issue.updated_at))}</span></div>
+      <div class="issue-card-footer"><span>담당 ${escapeHtml(issue.manager_name || '-')}</span><span>최종 업데이트 ${escapeHtml(formatDateTime(issue.updated_at))}</span></div>
+    </article>
+  `;
+}
+
+function inventoryCardHtml(item) {
+  const category = inventoryCategoryMeta(item.category);
+  const status = inventoryStatusMeta(item.status);
+  const area = areaById(item.area_id);
+  const photos = safeArray(item.photo_paths).map((path) => data.resolvePhotoUrl(path)).filter(Boolean);
+  return `
+    <article class="issue-card">
+      <div class="issue-card-head">
+        <div class="issue-card-title">
+          <div class="issue-badges">
+            <span class="badge category-${category.className}">${category.label}</span>
+            <span class="badge status-${status.className}">${status.label}</span>
+          </div>
+          <h3>${escapeHtml(item.name)}</h3>
+        </div>
+      </div>
+      <div class="issue-card-meta">
+        <span>공간 ${escapeHtml(area?.name || '공통·기타')}</span>
+        <span>기준일 ${escapeHtml(formatShortDate(item.record_date))}</span>
+        ${item.quantity ? `<span>수량 ${escapeHtml(item.quantity)}</span>` : ''}
+      </div>
+      <div class="issue-card-body">
+        <p>${item.note ? nl2br(item.note) : '등록된 현황 메모가 없습니다.'}</p>
+        ${photos.length ? `<div class="photo-strip">${photos.map((url) => `<a class="photo-thumb" href="${escapeHtml(url)}" target="_blank" rel="noopener"><img src="${escapeHtml(url)}" alt="시설비품 사진" /></a>`).join('')}</div>` : ''}
+      </div>
+      <div class="issue-card-footer"><span>담당 ${escapeHtml(item.manager_name || '-')}</span><span>최종 업데이트 ${escapeHtml(formatDateTime(item.updated_at))}</span></div>
     </article>
   `;
 }
@@ -298,6 +318,15 @@ async function loadAllIssues() {
   }
 }
 
+async function loadAllInventories() {
+  try {
+    const inventories = await data.getInventories({ start: APP_START_DATE, end: appCurrentDate() });
+    state.allInventories = inventories.filter((item) => item.is_public !== false);
+  } catch (error) {
+    console.error(error);
+  }
+}
+
 function renderIssueList(category, filter, targetId) {
   const items = state.allIssues.filter((item) => category === 'complaint' ? item.category === 'complaint' : item.category !== 'complaint');
   const filtered = applyIssueFilter(items, filter);
@@ -306,6 +335,12 @@ function renderIssueList(category, filter, targetId) {
   target.innerHTML = filtered.length
     ? filtered.map((item) => issueCardHtml(item)).join('')
     : category === 'complaint' ? '해당 조건의 민원 기록이 없습니다.' : '해당 조건의 조치업무가 없습니다.';
+}
+
+function renderInventoryList() {
+  const target = $('#inventoryList');
+  target.className = state.allInventories.length ? 'card-list' : 'card-list empty-state';
+  target.innerHTML = state.allInventories.length ? state.allInventories.map((item) => inventoryCardHtml(item)).join('') : '공개된 시설·비품 현황이 없습니다.';
 }
 
 async function loadCalendar() {
@@ -392,11 +427,13 @@ async function loadMonthlyReport() {
   $('#reportPrevMonth').disabled = month <= APP_START_MONTH;
   $('#reportNextMonth').disabled = month >= currentMonth;
   try {
-    const [inspections, issues] = end < start ? [[], []] : await Promise.all([
+    const [inspections, issues, inventories] = end < start ? [[], [], []] : await Promise.all([
       data.getInspections({ start, end }),
       data.getIssues({ start, end }),
+      data.getInventories({ start, end }),
     ]);
     const publicIssues = issues.filter((item) => item.is_public !== false);
+    const publicInventories = inventories.filter((item) => item.is_public !== false);
     const elapsedDays = elapsedDaysForMonth(state.reportMonth);
     const possible = elapsedDays * state.areas.length * 2;
     const rate = completionPercent(inspections.length, possible);
@@ -409,7 +446,7 @@ async function loadMonthlyReport() {
       <article class="summary-card success"><span class="summary-label"><i class="summary-icon">%</i>점검 입력률</span><strong>${rate}<small>%</small></strong><p>${inspections.length}건 / 기준 ${possible || 0}건</p></article>
       <article class="summary-card"><span class="summary-label"><i class="summary-icon">✓</i>정상·완료 점검</span><strong>${normal}<small>건</small></strong><p>전체 점검 중 정상 관리 건수</p></article>
       <article class="summary-card progress-card"><span class="summary-label"><i class="summary-icon">!</i>시설·안전 조치</span><strong>${actions.length}<small>건</small></strong><p>해당 월 접수 기준</p></article>
-      <article class="summary-card"><span class="summary-label"><i class="summary-icon">◌</i>민원·완료</span><strong>${complaints.length}<small>건</small></strong><p>전체 업무 완료 ${resolved}건</p></article>
+      <article class="summary-card"><span class="summary-label"><i class="summary-icon">◌</i>민원·비품</span><strong>${complaints.length + publicInventories.length}<small>건</small></strong><p>민원 ${complaints.length}건 · 비품 ${publicInventories.length}건</p></article>
     `;
 
     const areaRows = state.areas.map((area) => {
@@ -422,7 +459,9 @@ async function loadMonthlyReport() {
     }).join('');
     $('#areaReportTable').innerHTML = `<table class="data-table"><thead><tr><th>관리 공간</th><th>오전</th><th>오후</th><th>합계</th><th>입력률</th></tr></thead><tbody>${areaRows}</tbody></table>`;
 
-    const activity = publicIssues.slice(0, 10);
+    const activity = [...publicIssues, ...publicInventories.map((item) => ({
+      category: 'other', title: `[비품] ${item.name}`, area_id: item.area_id, received_date: item.record_date, status: 'completed',
+    }))].slice(0, 10);
     $('#monthlyActivityList').className = activity.length ? 'compact-list' : 'compact-list empty-state';
     $('#monthlyActivityList').innerHTML = activity.length ? activity.map(compactItemHtml).join('') : '해당 월에 등록된 조치·민원 기록이 없습니다.';
   } catch (error) {
@@ -442,6 +481,7 @@ function showTab(tab) {
   if (tab === 'calendar') loadCalendar();
   if (tab === 'issues') renderIssueList('issue', state.issueFilter, 'issuesList');
   if (tab === 'complaints') renderIssueList('complaint', state.complaintFilter, 'complaintsList');
+  if (tab === 'inventory') renderInventoryList();
   if (tab === 'report') loadMonthlyReport();
 }
 
@@ -514,10 +554,11 @@ function bindEvents() {
 }
 
 async function refreshVisibleData() {
-  await Promise.all([loadAllIssues(), loadDaily()]);
+  await Promise.all([loadAllIssues(), loadAllInventories(), loadDaily()]);
   if (state.activeTab === 'calendar') await loadCalendar();
   if (state.activeTab === 'issues') renderIssueList('issue', state.issueFilter, 'issuesList');
   if (state.activeTab === 'complaints') renderIssueList('complaint', state.complaintFilter, 'complaintsList');
+  if (state.activeTab === 'inventory') renderInventoryList();
   if (state.activeTab === 'report') await loadMonthlyReport();
 }
 
@@ -528,9 +569,9 @@ async function bootstrap() {
   const connection = await data.init();
   renderModeBanner(connection);
   state.areas = await data.getAreas();
-  await Promise.all([loadDaily(), loadAllIssues()]);
+  await Promise.all([loadDaily(), loadAllIssues(), loadAllInventories()]);
 
-  const initialTab = ['today', 'calendar', 'issues', 'complaints', 'report'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'today';
+  const initialTab = ['today', 'calendar', 'issues', 'complaints', 'inventory', 'report'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'today';
   showTab(initialTab);
 
   const live = $('#liveIndicator');

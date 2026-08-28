@@ -11,8 +11,11 @@ import {
   formatDateTime,
   formatKoreanDate,
   formatShortDate,
+  inventoryCategoryMeta,
+  inventoryStatusMeta,
   isOpenIssue,
   issueStatusMeta,
+  itemStatusMeta,
   nl2br,
   openModal,
   closeModal,
@@ -33,11 +36,13 @@ const state = {
   selectedDate: appCurrentDate(),
   inspections: [],
   issues: [],
+  inventories: [],
   activeTab: 'inspections',
   issueFilter: 'open',
   complaintFilter: 'open',
   inspectionPhotos: [],
   issuePhotos: [],
+  inventoryPhotos: [],
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -137,9 +142,9 @@ function renderDailySummary() {
 function adminCellHtml(area, period, inspection) {
   const meta = statusMeta(inspection?.status);
   const checked = safeArray(inspection?.checked_items).length;
-  const detail = inspection ? `${checked}/${safeArray(area.checklist).length}개 항목 · ${inspection.manager_name || '관리자'}` : '눌러서 점검 입력';
+  const detail = inspection ? `${checked}/${safeArray(area.checklist).length}개 항목 · ${inspection.manager_name || '-'}` : '눌러서 점검 입력';
   return `
-    <button class="inspection-cell ${meta.className}" type="button" data-area-id="${area.id}" data-period="${period}" data-period-label="${PERIOD_META[period].label}">
+    <button class="inspection-cell ${meta.className}" type="button" data-area-id="${area.id}" data-period="${period}">
       <span class="status-symbol">${meta.icon}</span>
       <span class="cell-copy"><strong>${meta.label}</strong><small>${escapeHtml(detail)}</small></span>
       <span class="cell-arrow">›</span>
@@ -184,6 +189,23 @@ function renderPhotoPreview(container, paths, onRemove) {
   $$('[data-remove-photo]', container).forEach((button) => button.addEventListener('click', () => onRemove(Number(button.dataset.removePhoto))));
 }
 
+function buildChecklistRow(item, checked, status) {
+  return `
+    <div class="check-item-row">
+      <label class="check-item check-item-rich">
+        <span class="check-item-main"><input type="checkbox" name="inspection-check" value="${escapeHtml(item)}" ${checked ? 'checked' : ''} /><span>${escapeHtml(item)}</span></span>
+      </label>
+      <select class="item-status-select" data-item-status="${escapeHtml(item)}">
+        <option value="unchecked" ${status === 'unchecked' ? 'selected' : ''}>미점검</option>
+        <option value="normal" ${status === 'normal' ? 'selected' : ''}>정상</option>
+        <option value="issue" ${status === 'issue' ? 'selected' : ''}>이상 발견</option>
+        <option value="in_progress" ${status === 'in_progress' ? 'selected' : ''}>조치 중</option>
+        <option value="completed" ${status === 'completed' ? 'selected' : ''}>조치 완료</option>
+      </select>
+    </div>
+  `;
+}
+
 function openInspectionEditor(areaId, period) {
   const area = areaById(areaId);
   const existing = state.inspections.find((item) => Number(item.area_id) === Number(areaId) && item.period === period);
@@ -193,14 +215,13 @@ function openInspectionEditor(areaId, period) {
   $('#inspectionAreaId').value = area.id;
   $('#inspectionPeriod').value = period;
   $('#inspectionStatus').value = existing?.status || 'normal';
-  $('#inspectionManager').value = state.profile.display_name || '관리자';
+  $('#inspectionManager').value = existing?.manager_name || '';
   $('#inspectionNote').value = existing?.note || '';
   $('#inspectionPhotos').value = '';
   state.inspectionPhotos = [...safeArray(existing?.photo_paths)];
   const checked = new Set(existing ? safeArray(existing.checked_items) : safeArray(area.checklist));
-  $('#inspectionChecklist').innerHTML = safeArray(area.checklist).map((item, index) => `
-    <label class="check-item"><input type="checkbox" name="inspection-check" value="${escapeHtml(item)}" ${checked.has(item) ? 'checked' : ''} /><span>${escapeHtml(item)}</span></label>
-  `).join('');
+  const itemStatuses = existing?.item_statuses || {};
+  $('#inspectionChecklist').innerHTML = safeArray(area.checklist).map((item) => buildChecklistRow(item, checked.has(item), itemStatuses[item] || (checked.has(item) ? 'normal' : 'unchecked'))).join('');
   refreshInspectionPhotos();
   $('#deleteInspectionButton').classList.toggle('hidden', !existing);
   openModal($('#inspectionModal'));
@@ -222,15 +243,17 @@ async function saveInspection(event) {
     if (state.inspectionPhotos.length + selectedFiles.length > 3) throw new Error('사진은 기존 사진을 포함해 최대 3장까지 등록할 수 있습니다.');
     const uploaded = await data.uploadPhotos(selectedFiles);
     const checkedItems = $$('input[name="inspection-check"]:checked').map((input) => input.value);
+    const itemStatuses = Object.fromEntries($$('[data-item-status]').map((select) => [select.dataset.itemStatus, select.value]));
     await data.upsertInspection({
       inspection_date: state.selectedDate,
       period: $('#inspectionPeriod').value,
       area_id: $('#inspectionAreaId').value,
       status: $('#inspectionStatus').value,
       checked_items: checkedItems,
+      item_statuses: itemStatuses,
       note: $('#inspectionNote').value,
       photo_paths: [...state.inspectionPhotos, ...uploaded],
-      manager_name: state.profile.display_name || '관리자',
+      manager_name: $('#inspectionManager').value.trim(),
     });
     closeModal($('#inspectionModal'));
     await loadDay();
@@ -255,44 +278,37 @@ async function deleteCurrentInspection() {
     await loadDay();
     showToast('점검 기록을 삭제했습니다.');
   } catch (error) {
-    showToast(error.message || '삭제에 실패했습니다.', 'error');
+    console.error(error);
+    showToast(error.message || '점검 기록 삭제에 실패했습니다.', 'error');
   } finally {
     setBusy(button, false);
   }
 }
 
 async function bulkNormal(period) {
-  const missing = state.areas.filter((area) => !state.inspections.some((item) => Number(item.area_id) === Number(area.id) && item.period === period));
-  if (!missing.length) {
-    showToast(`${PERIOD_META[period].label} 미점검 공간이 없습니다.`);
-    return;
-  }
-  if (!window.confirm(`${PERIOD_META[period].label} 미점검 ${missing.length}개 공간을 모두 '정상'으로 기록할까요? 실제 점검을 완료한 경우에만 진행해 주세요.`)) return;
-  const button = period === 'AM' ? $('#bulkAmNormal') : $('#bulkPmNormal');
-  setBusy(button, true, '저장 중...');
+  if (!window.confirm(`${PERIOD_META[period].label} 미점검 항목을 전체 정상으로 입력할까요?`)) return;
   try {
-    for (const area of missing) {
-      await data.upsertInspection({
-        inspection_date: state.selectedDate,
-        period,
-        area_id: area.id,
-        status: 'normal',
-        checked_items: safeArray(area.checklist),
-        note: '',
-        photo_paths: [],
-        manager_name: state.profile.display_name || '관리자',
-      });
-    }
+    const existingKeys = new Set(state.inspections.filter((item) => item.period === period).map((item) => `${item.area_id}-${item.period}`));
+    await Promise.all(state.areas.filter((area) => !existingKeys.has(`${area.id}-${period}`)).map((area) => data.upsertInspection({
+      inspection_date: state.selectedDate,
+      period,
+      area_id: area.id,
+      status: 'normal',
+      checked_items: safeArray(area.checklist),
+      item_statuses: Object.fromEntries(safeArray(area.checklist).map((item) => [item, 'normal'])),
+      note: '',
+      photo_paths: [],
+      manager_name: state.profile.display_name || '',
+    })));
     await loadDay();
-    showToast(`${PERIOD_META[period].label} 미점검 ${missing.length}개 공간을 정상으로 저장했습니다.`);
+    showToast(`${PERIOD_META[period].label} 미점검 항목을 전체 정상으로 저장했습니다.`);
   } catch (error) {
+    console.error(error);
     showToast(error.message || '일괄 저장에 실패했습니다.', 'error');
-  } finally {
-    setBusy(button, false);
   }
 }
 
-function issueCardHtml(issue) {
+function issueCardHtml(issue, { editable = true } = {}) {
   const category = categoryMeta(issue.category);
   const status = issueStatusMeta(issue.status);
   const priority = priorityMeta(issue.priority);
@@ -306,11 +322,10 @@ function issueCardHtml(issue) {
             <span class="badge category-${category.className}">${category.label}</span>
             <span class="badge status-${status.className}">${status.label}</span>
             ${['high', 'urgent'].includes(issue.priority) ? `<span class="badge priority-${priority.className}">${priority.label}</span>` : ''}
-            ${issue.is_public === false ? '<span class="badge private">비공개</span>' : ''}
           </div>
           <h3>${escapeHtml(issue.title)}</h3>
         </div>
-        <button class="card-edit-button" type="button" data-edit-issue="${issue.id}">수정</button>
+        ${editable ? `<button class="card-edit-button" type="button" data-edit-issue="${issue.id}">수정</button>` : ''}
       </div>
       <div class="issue-card-meta">
         <span>공간 ${escapeHtml(area?.name || '공통·기타')}</span>
@@ -322,32 +337,74 @@ function issueCardHtml(issue) {
         ${issue.action_note ? `<div class="issue-action-box"><strong>조치 내용·진행 상황</strong><p>${nl2br(issue.action_note)}</p></div>` : ''}
         ${photos.length ? `<div class="photo-strip">${photos.map((url) => `<a class="photo-thumb" href="${escapeHtml(url)}" target="_blank" rel="noopener"><img src="${escapeHtml(url)}" alt="증빙 사진" /></a>`).join('')}</div>` : ''}
       </div>
-      <div class="issue-card-footer"><span>담당 ${escapeHtml(issue.manager_name || '관리자')}</span><span>최종 업데이트 ${escapeHtml(formatDateTime(issue.updated_at))}</span></div>
+      <div class="issue-card-footer"><span>담당 ${escapeHtml(issue.manager_name || '-')}</span><span>최종 업데이트 ${escapeHtml(formatDateTime(issue.updated_at))}</span></div>
     </article>
   `;
 }
 
-function applyFilter(items, filter) {
+function inventoryCardHtml(item, { editable = true } = {}) {
+  const category = inventoryCategoryMeta(item.category);
+  const status = inventoryStatusMeta(item.status);
+  const area = areaById(item.area_id);
+  const photos = safeArray(item.photo_paths).map((path) => data.resolvePhotoUrl(path)).filter(Boolean);
+  return `
+    <article class="issue-card">
+      <div class="issue-card-head">
+        <div class="issue-card-title">
+          <div class="issue-badges">
+            <span class="badge category-${category.className}">${category.label}</span>
+            <span class="badge status-${status.className}">${status.label}</span>
+          </div>
+          <h3>${escapeHtml(item.name)}</h3>
+        </div>
+        ${editable ? `<button class="card-edit-button" type="button" data-edit-inventory="${item.id}">수정</button>` : ''}
+      </div>
+      <div class="issue-card-meta">
+        <span>공간 ${escapeHtml(area?.name || '공통·기타')}</span>
+        <span>기준일 ${escapeHtml(formatShortDate(item.record_date))}</span>
+        ${item.quantity ? `<span>수량 ${escapeHtml(item.quantity)}</span>` : ''}
+      </div>
+      <div class="issue-card-body">
+        <p>${item.note ? nl2br(item.note) : '등록된 비고가 없습니다.'}</p>
+        ${photos.length ? `<div class="photo-strip">${photos.map((url) => `<a class="photo-thumb" href="${escapeHtml(url)}" target="_blank" rel="noopener"><img src="${escapeHtml(url)}" alt="시설비품 사진" /></a>`).join('')}</div>` : ''}
+      </div>
+      <div class="issue-card-footer"><span>담당 ${escapeHtml(item.manager_name || '-')}</span><span>최종 업데이트 ${escapeHtml(formatDateTime(item.updated_at))}</span></div>
+    </article>
+  `;
+}
+
+function applyIssueFilter(items, filter) {
   if (filter === 'open') return items.filter(isOpenIssue);
   if (filter === 'completed') return items.filter((item) => item.status === 'completed');
   return items;
 }
 
-function renderIssueLists() {
-  const regular = applyFilter(state.issues.filter((item) => item.category !== 'complaint'), state.issueFilter);
-  const complaints = applyFilter(state.issues.filter((item) => item.category === 'complaint'), state.complaintFilter);
-  const issueTarget = $('#adminIssuesList');
-  const complaintTarget = $('#adminComplaintsList');
-  issueTarget.className = regular.length ? 'card-list' : 'card-list empty-state';
-  complaintTarget.className = complaints.length ? 'card-list' : 'card-list empty-state';
-  issueTarget.innerHTML = regular.length ? regular.map(issueCardHtml).join('') : '해당 조건의 조치업무가 없습니다.';
-  complaintTarget.innerHTML = complaints.length ? complaints.map(issueCardHtml).join('') : '해당 조건의 민원 기록이 없습니다.';
-  $('#adminIssueCount').textContent = `표시 ${regular.length}건 · 전체 ${state.issues.filter((item) => item.category !== 'complaint').length}건`;
-  $('#adminComplaintCount').textContent = `표시 ${complaints.length}건 · 전체 ${state.issues.filter((item) => item.category === 'complaint').length}건`;
-  $$('[data-edit-issue]').forEach((button) => button.addEventListener('click', () => {
+function bindEditButtons() {
+  $$('[data-edit-issue]').forEach((button) => {
     const issue = state.issues.find((item) => item.id === button.dataset.editIssue);
-    if (issue) openIssueEditor(issue.category === 'complaint' ? 'complaint' : 'issue', issue);
-  }));
+    button.addEventListener('click', () => openIssueEditor(issue?.category === 'complaint' ? 'complaint' : 'issue', issue));
+  });
+  $$('[data-edit-inventory]').forEach((button) => {
+    const item = state.inventories.find((inventory) => inventory.id === button.dataset.editInventory);
+    button.addEventListener('click', () => openInventoryEditor(item));
+  });
+}
+
+function renderIssueLists() {
+  const issueItems = state.issues.filter((item) => item.category !== 'complaint');
+  const complaintItems = state.issues.filter((item) => item.category === 'complaint');
+  const issueFiltered = applyIssueFilter(issueItems, state.issueFilter);
+  const complaintFiltered = applyIssueFilter(complaintItems, state.complaintFilter);
+
+  $('#adminIssueCount').textContent = `전체 ${issueItems.length}건`;
+  $('#adminComplaintCount').textContent = `전체 ${complaintItems.length}건`;
+  $('#adminIssuesList').className = issueFiltered.length ? 'card-list' : 'card-list empty-state';
+  $('#adminComplaintsList').className = complaintFiltered.length ? 'card-list' : 'card-list empty-state';
+  $('#adminIssuesList').innerHTML = issueFiltered.length ? issueFiltered.map((item) => issueCardHtml(item)).join('') : '해당 조건의 조치업무가 없습니다.';
+  $('#adminComplaintsList').innerHTML = complaintFiltered.length ? complaintFiltered.map((item) => issueCardHtml(item)).join('') : '해당 조건의 민원 기록이 없습니다.';
+  $('#adminInventoryList').className = state.inventories.length ? 'card-list' : 'card-list empty-state';
+  $('#adminInventoryList').innerHTML = state.inventories.length ? state.inventories.map((item) => inventoryCardHtml(item)).join('') : '등록된 시설·비품 현황이 없습니다.';
+  bindEditButtons();
 }
 
 async function loadIssues() {
@@ -358,6 +415,16 @@ async function loadIssues() {
     console.error(error);
     $('#adminIssuesList').innerHTML = '<div class="empty-state">조치업무를 불러오지 못했습니다.</div>';
     $('#adminComplaintsList').innerHTML = '<div class="empty-state">민원 기록을 불러오지 못했습니다.</div>';
+  }
+}
+
+async function loadInventories() {
+  try {
+    state.inventories = await data.getInventories({ start: APP_START_DATE, end: appCurrentDate() });
+    renderIssueLists();
+  } catch (error) {
+    console.error(error);
+    $('#adminInventoryList').innerHTML = '<div class="empty-state">시설·비품 현황을 불러오지 못했습니다.</div>';
   }
 }
 
@@ -422,7 +489,7 @@ async function saveIssue(event) {
       description: $('#issueDescription').value,
       action_note: $('#issueActionNote').value,
       photo_paths: [...state.issuePhotos, ...uploaded],
-      manager_name: state.profile.display_name || '관리자',
+      manager_name: state.profile.display_name || '',
     });
     closeModal($('#issueModal'));
     await loadIssues();
@@ -447,6 +514,87 @@ async function deleteCurrentIssue() {
     await loadIssues();
     showToast('기록을 삭제했습니다.');
   } catch (error) {
+    showToast(error.message || '삭제에 실패했습니다.', 'error');
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+function refreshInventoryPhotos() {
+  renderPhotoPreview($('#inventoryPhotoPreview'), state.inventoryPhotos, (index) => {
+    state.inventoryPhotos.splice(index, 1);
+    refreshInventoryPhotos();
+  });
+}
+
+function openInventoryEditor(item = null) {
+  const maximum = appCurrentDate();
+  $('#inventoryModalTitle').textContent = item ? '시설·비품 기록 수정' : '시설·비품 등록';
+  $('#inventoryModalSubtitle').textContent = '시설 및 비품의 현황을 기록하고 공개 여부를 설정합니다.';
+  $('#inventoryId').value = item?.id || '';
+  $('#inventoryRecordDate').min = APP_START_DATE;
+  $('#inventoryRecordDate').max = maximum;
+  $('#inventoryRecordDate').value = clampAppDate(item?.record_date || state.selectedDate || maximum);
+  $('#inventoryCategory').value = item?.category || 'facility';
+  $('#inventoryAreaId').value = item?.area_id || '';
+  $('#inventoryStatus').value = item?.status || 'normal';
+  $('#inventoryManager').value = item?.manager_name || '';
+  $('#inventoryQuantity').value = item?.quantity || '';
+  $('#inventoryIsPublic').checked = item?.is_public !== false;
+  $('#inventoryName').value = item?.name || '';
+  $('#inventoryNote').value = item?.note || '';
+  $('#inventoryPhotos').value = '';
+  state.inventoryPhotos = [...safeArray(item?.photo_paths)];
+  refreshInventoryPhotos();
+  $('#deleteInventoryButton').classList.toggle('hidden', !item);
+  openModal($('#inventoryModal'));
+}
+
+async function saveInventory(event) {
+  event.preventDefault();
+  const button = $('#saveInventoryButton');
+  setBusy(button, true, '저장 중...');
+  try {
+    const selectedFiles = Array.from($('#inventoryPhotos').files || []);
+    if (state.inventoryPhotos.length + selectedFiles.length > 3) throw new Error('사진은 기존 사진을 포함해 최대 3장까지 등록할 수 있습니다.');
+    const uploaded = await data.uploadPhotos(selectedFiles);
+    await data.saveInventory({
+      id: $('#inventoryId').value || null,
+      record_date: $('#inventoryRecordDate').value,
+      category: $('#inventoryCategory').value,
+      area_id: $('#inventoryAreaId').value || null,
+      status: $('#inventoryStatus').value,
+      quantity: $('#inventoryQuantity').value,
+      is_public: $('#inventoryIsPublic').checked,
+      name: $('#inventoryName').value,
+      note: $('#inventoryNote').value,
+      photo_paths: [...state.inventoryPhotos, ...uploaded],
+      manager_name: $('#inventoryManager').value.trim(),
+    });
+    closeModal($('#inventoryModal'));
+    await loadInventories();
+    showToast('시설·비품 현황을 저장했습니다.');
+  } catch (error) {
+    console.error(error);
+    showToast(error.message || '시설·비품 현황 저장에 실패했습니다.', 'error');
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+async function deleteCurrentInventory() {
+  const id = $('#inventoryId').value;
+  if (!id) return;
+  if (!window.confirm('이 시설·비품 기록을 삭제할까요?')) return;
+  const button = $('#deleteInventoryButton');
+  setBusy(button, true, '삭제 중...');
+  try {
+    await data.deleteInventory(id);
+    closeModal($('#inventoryModal'));
+    await loadInventories();
+    showToast('시설·비품 기록을 삭제했습니다.');
+  } catch (error) {
+    console.error(error);
     showToast(error.message || '삭제에 실패했습니다.', 'error');
   } finally {
     setBusy(button, false);
@@ -540,6 +688,11 @@ function bindEvents() {
   $('#deleteIssueButton').addEventListener('click', deleteCurrentIssue);
   $$('[data-close-issue]').forEach((button) => button.addEventListener('click', () => closeModal($('#issueModal'))));
 
+  $('#addInventoryButton').addEventListener('click', () => openInventoryEditor());
+  $('#inventoryForm').addEventListener('submit', saveInventory);
+  $('#deleteInventoryButton').addEventListener('click', deleteCurrentInventory);
+  $$('[data-close-inventory]').forEach((button) => button.addEventListener('click', () => closeModal($('#inventoryModal'))));
+
   $$('[data-admin-issue-filter]').forEach((button) => button.addEventListener('click', () => {
     state.issueFilter = button.dataset.adminIssueFilter;
     $$('[data-admin-issue-filter]').forEach((item) => item.classList.toggle('active', item === button));
@@ -555,6 +708,7 @@ function bindEvents() {
     if (event.key === 'Escape') {
       closeModal($('#inspectionModal'));
       closeModal($('#issueModal'));
+      closeModal($('#inventoryModal'));
     }
   });
 }
@@ -563,15 +717,17 @@ let appStarted = false;
 async function startAdminApp() {
   if (!state.areas.length) {
     state.areas = await data.getAreas();
-    $('#issueAreaId').innerHTML = '<option value="">공통·기타</option>' + state.areas.map((area) => `<option value="${area.id}">${escapeHtml(area.name)}</option>`).join('');
+    const options = '<option value="">공통·기타</option>' + state.areas.map((area) => `<option value="${area.id}">${escapeHtml(area.name)}</option>`).join('');
+    $('#issueAreaId').innerHTML = options;
+    $('#inventoryAreaId').innerHTML = options;
   }
-  await Promise.all([loadDay(), loadIssues()]);
+  await Promise.all([loadDay(), loadIssues(), loadInventories()]);
   if (appStarted) return;
   appStarted = true;
   const indicator = $('#adminLiveIndicator');
   const refresh = debounce(async () => {
     if (state.activeTab === 'inspections') await loadDay();
-    await loadIssues();
+    await Promise.all([loadIssues(), loadInventories()]);
   }, 180);
   data.subscribe((event) => {
     if (event.table === 'connection') {

@@ -77,6 +77,7 @@
         <button class="admin-tab active" data-admin-tab="inspections" type="button">오전·오후 점검</button>
         <button class="admin-tab" data-admin-tab="issues" type="button">시설·안전 조치</button>
         <button class="admin-tab" data-admin-tab="complaints" type="button">민원 관리</button>
+        <button class="admin-tab" data-admin-tab="inventory" type="button">시설비품현황</button>
       </nav>
 
       <section id="admin-view-inspections" class="admin-view active" data-admin-view="inspections">
@@ -155,6 +156,21 @@
         </div>
         <div id="adminComplaintsList" class="card-list loading-block"></div>
       </section>
+
+      <section id="admin-view-inventory" class="admin-view" data-admin-view="inventory" hidden>
+        <div class="section-toolbar admin-toolbar">
+          <div>
+            <p class="section-kicker">FACILITY INVENTORY</p>
+            <h2>시설비품현황</h2>
+          </div>
+          <button id="addInventoryButton" class="primary-button" type="button">+ 시설·비품 등록</button>
+        </div>
+        <div class="privacy-notice admin-notice">
+          <strong>입력 원칙</strong>
+          <span>시설·비품 현황은 관리자가 직접 입력하며, 공개 체크한 내역만 열람 화면에 노출됩니다.</span>
+        </div>
+        <div id="adminInventoryList" class="card-list loading-block"></div>
+      </section>
     </main>
   </div>
 
@@ -183,12 +199,13 @@
           </label>
           <label class="field">
             <span>점검 담당자</span>
-            <input id="inspectionManager" type="text" readonly />
+            <input id="inspectionManager" type="text" placeholder="관리자 이름 입력" />
           </label>
         </div>
         <fieldset class="checklist-fieldset">
           <legend>점검 항목</legend>
-          <div id="inspectionChecklist" class="checklist-grid"></div>
+          <div class="checklist-fieldset-note">기존 체크 항목은 유지하고, 각 항목별 상태를 추가로 선택할 수 있습니다.</div>
+          <div id="inspectionChecklist" class="checklist-status-list"></div>
         </fieldset>
         <label class="field">
           <span>특이사항·조치내용</span>
@@ -295,7 +312,82 @@
     </div>
   </div>
 
-  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <div id="inventoryModal" class="modal" aria-hidden="true">
+    <div class="modal-backdrop" data-close-inventory></div>
+    <div class="modal-dialog modal-wide" role="dialog" aria-modal="true" aria-labelledby="inventoryModalTitle">
+      <button class="modal-close" type="button" data-close-inventory aria-label="닫기">×</button>
+      <form id="inventoryForm">
+        <div class="modal-heading">
+          <p class="section-kicker">FACILITY INVENTORY</p>
+          <h2 id="inventoryModalTitle">시설·비품 등록</h2>
+          <p id="inventoryModalSubtitle">시설 및 비품의 현황을 기록하고 공개 여부를 설정합니다.</p>
+        </div>
+        <input id="inventoryId" type="hidden" />
+        <div class="form-grid two">
+          <label class="field">
+            <span>구분 <b>*</b></span>
+            <select id="inventoryCategory" required>
+              <option value="facility">시설</option>
+              <option value="equipment">비품</option>
+              <option value="supply">소모품</option>
+              <option value="other">기타</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>기준일 <b>*</b></span>
+            <input id="inventoryRecordDate" type="date" min="2026-09-01" required />
+          </label>
+          <label class="field">
+            <span>관련 공간</span>
+            <select id="inventoryAreaId"><option value="">공통·기타</option></select>
+          </label>
+          <label class="field">
+            <span>상태 <b>*</b></span>
+            <select id="inventoryStatus" required>
+              <option value="normal">정상</option>
+              <option value="low">부족</option>
+              <option value="restocking">보충 중</option>
+              <option value="repair">수리 필요</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>관리자 이름</span>
+            <input id="inventoryManager" type="text" placeholder="관리자 이름 입력" />
+          </label>
+          <label class="field">
+            <span>수량·재고</span>
+            <input id="inventoryQuantity" type="text" maxlength="80" placeholder="예: 2박스, 1대, 5세트" />
+          </label>
+          <label class="field checkbox-field">
+            <input id="inventoryIsPublic" type="checkbox" checked />
+            <span>입대의 열람 화면에 공개</span>
+          </label>
+        </div>
+        <label class="field">
+          <span>항목명 <b>*</b></span>
+          <input id="inventoryName" type="text" maxlength="120" required placeholder="예: 로비 안내 배너, 화장실 휴지, 스크린골프 타석 매트" />
+        </label>
+        <label class="field">
+          <span>현황·비고</span>
+          <textarea id="inventoryNote" rows="4" placeholder="현재 상태나 비고를 입력해 주세요."></textarea>
+        </label>
+        <label class="field">
+          <span>증빙 사진 <small>선택, 최대 3장</small></span>
+          <input id="inventoryPhotos" type="file" accept="image/*" multiple />
+        </label>
+        <div id="inventoryPhotoPreview" class="photo-preview"></div>
+        <div class="modal-actions split">
+          <button id="deleteInventoryButton" class="danger-button hidden" type="button">기록 삭제</button>
+          <div class="right-actions">
+            <button class="soft-button" type="button" data-close-inventory>취소</button>
+            <button id="saveInventoryButton" class="primary-button" type="submit">저장</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script type="module" src="/assets/admin.js"></script>
 </body>
 </html>
