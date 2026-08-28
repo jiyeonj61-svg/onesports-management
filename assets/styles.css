@@ -888,3 +888,15 @@ img { display: block; max-width: 100%; }
   .mobile-tab { font-size: 8px; }
 }
 .live-indicator.demo i { background: var(--warning); box-shadow: 0 0 0 4px rgba(217, 148, 39, 0.14); }
+
+/* 본사점검 유형 표시 */
+.badge.type-onsite,
+.compact-item .mini-badge.onsite {
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+.badge.type-written,
+.compact-item .mini-badge.written {
+  background: var(--purple-soft);
+  color: var(--purple);
+}

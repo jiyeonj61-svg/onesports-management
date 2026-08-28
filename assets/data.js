@@ -1,6 +1,6 @@
 import { APP_START_DATE, AREA_FALLBACK, appCurrentDate, safeArray, uuid } from './common.js';
 
-const DEMO_STORE_KEY = 'onesports-management-demo-v5';
+const DEMO_STORE_KEY = 'onesports-management-demo-v6';
 const DEMO_ADMIN_KEY = 'onesports-management-demo-admin';
 const PHOTO_BUCKET = 'management-photos';
 
@@ -101,7 +101,7 @@ function generateDemoStore() {
   });
 
   return {
-    version: 5,
+    version: 6,
     areas: deepClone(AREA_FALLBACK),
     inspections,
     issues: [
@@ -152,6 +152,22 @@ function generateDemoStore() {
         updated_at: timestamp,
       },
     ],
+    headOfficeChecks: [
+      {
+        id: uuid(),
+        check_date: today,
+        check_type: 'onsite',
+        scope: 'all',
+        status: 'completed',
+        title: '본사 정기 현장점검',
+        result: '센터 전 공간의 청결, 시설 작동상태 및 안전관리 현황을 확인했습니다.',
+        follow_up: '특이사항은 조치·민원 관리 메뉴에서 후속 관리합니다.',
+        photo_paths: [],
+        manager_name: '본사 관리자',
+        created_at: timestamp,
+        updated_at: timestamp,
+      },
+    ],
   };
 }
 
@@ -162,11 +178,12 @@ function loadDemoStore() {
   } catch {
     store = null;
   }
-  if (!store || store.version !== 5) {
+  if (!store || store.version !== 6) {
     store = generateDemoStore();
     saveDemoStore(store);
   }
   if (!Array.isArray(store.inventories)) store.inventories = [];
+  if (!Array.isArray(store.headOfficeChecks)) store.headOfficeChecks = [];
   return store;
 }
 
@@ -481,6 +498,77 @@ async function deleteInventory(id) {
   if (error) throw error;
 }
 
+async function getHeadOfficeChecks({ start, end } = {}) {
+  await init();
+  const range = normalizeDateRange(start, end);
+  if (range.empty) return [];
+  if (mode !== 'supabase') {
+    return deepClone(demoFilterDate(loadDemoStore().headOfficeChecks, 'check_date', range.start, range.end))
+      .sort((a, b) => `${b.check_date}${b.created_at}`.localeCompare(`${a.check_date}${a.created_at}`));
+  }
+  const { data, error } = await supabase
+    .from('head_office_checks')
+    .select('*')
+    .gte('check_date', range.start)
+    .lte('check_date', range.end)
+    .order('check_date', { ascending: false })
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+async function saveHeadOfficeCheck(payload) {
+  await init();
+  const record = {
+    check_date: assertOperationalDate(payload.check_date, '점검일'),
+    check_type: payload.check_type === 'written' ? 'written' : 'onsite',
+    scope: 'all',
+    status: 'completed',
+    title: payload.title.trim(),
+    result: payload.result.trim(),
+    follow_up: payload.follow_up?.trim() || '',
+    photo_paths: safeArray(payload.photo_paths),
+    manager_name: (payload.manager_name || '').trim(),
+  };
+
+  if (mode !== 'supabase') {
+    const store = loadDemoStore();
+    const timestamp = nowIso();
+    if (payload.id) {
+      const index = store.headOfficeChecks.findIndex((item) => item.id === payload.id);
+      if (index < 0) throw new Error('수정할 본사점검 기록을 찾을 수 없습니다.');
+      store.headOfficeChecks[index] = { ...store.headOfficeChecks[index], ...record, updated_at: timestamp };
+      saveDemoStore(store);
+      return deepClone(store.headOfficeChecks[index]);
+    }
+    const created = { id: uuid(), ...record, created_at: timestamp, updated_at: timestamp };
+    store.headOfficeChecks.push(created);
+    saveDemoStore(store);
+    return deepClone(created);
+  }
+
+  if (payload.id) {
+    const { data, error } = await supabase.from('head_office_checks').update(record).eq('id', payload.id).select().single();
+    if (error) throw error;
+    return data;
+  }
+  const { data, error } = await supabase.from('head_office_checks').insert(record).select().single();
+  if (error) throw error;
+  return data;
+}
+
+async function deleteHeadOfficeCheck(id) {
+  await init();
+  if (mode !== 'supabase') {
+    const store = loadDemoStore();
+    store.headOfficeChecks = store.headOfficeChecks.filter((item) => item.id !== id);
+    saveDemoStore(store);
+    return;
+  }
+  const { error } = await supabase.from('head_office_checks').delete().eq('id', id);
+  if (error) throw error;
+}
+
 async function uploadPhotos(files) {
   await init();
   const selected = Array.from(files || []).slice(0, 3);
@@ -581,6 +669,7 @@ function subscribe(callback) {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'inspections' }, (payload) => callback({ table: 'inspections', payload }))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'issues' }, (payload) => callback({ table: 'issues', payload }))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'inventories' }, (payload) => callback({ table: 'inventories', payload }))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'head_office_checks' }, (payload) => callback({ table: 'head_office_checks', payload }))
       .subscribe((status) => callback({ table: 'connection', status }));
     return () => supabase.removeChannel(channel);
   }
@@ -611,6 +700,9 @@ export const data = {
   getInventories,
   saveInventory,
   deleteInventory,
+  getHeadOfficeChecks,
+  saveHeadOfficeCheck,
+  deleteHeadOfficeCheck,
   uploadPhotos,
   resolvePhotoUrl,
   signIn,

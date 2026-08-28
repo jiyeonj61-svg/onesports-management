@@ -11,6 +11,7 @@ import {
   formatDateTime,
   formatKoreanDate,
   formatShortDate,
+  headOfficeCheckTypeMeta,
   inventoryCategoryMeta,
   inventoryStatusMeta,
   isOpenIssue,
@@ -37,12 +38,13 @@ const state = {
   inspections: [],
   issues: [],
   inventories: [],
+  headOfficeChecks: [],
   activeTab: 'inspections',
   issueFilter: 'open',
-  complaintFilter: 'open',
   inspectionPhotos: [],
   issuePhotos: [],
   inventoryPhotos: [],
+  headOfficeCheckPhotos: [],
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -342,6 +344,36 @@ function issueCardHtml(issue, { editable = true } = {}) {
   `;
 }
 
+function headOfficeCheckCardHtml(item, { editable = true } = {}) {
+  const type = headOfficeCheckTypeMeta(item.check_type);
+  const photos = safeArray(item.photo_paths).map((path) => data.resolvePhotoUrl(path)).filter(Boolean);
+  return `
+    <article class="issue-card">
+      <div class="issue-card-head">
+        <div class="issue-card-title">
+          <div class="issue-badges">
+            <span class="badge type-${type.className}">${type.label}</span>
+            <span class="badge status-completed">완료</span>
+          </div>
+          <h3>${escapeHtml(item.title)}</h3>
+        </div>
+        ${editable ? `<button class="card-edit-button" type="button" data-edit-head-office="${item.id}">수정</button>` : ''}
+      </div>
+      <div class="issue-card-meta">
+        <span>관련 공간 전체</span>
+        <span>점검일 ${escapeHtml(formatShortDate(item.check_date))}</span>
+        <span>형태 ${escapeHtml(type.label)}</span>
+      </div>
+      <div class="issue-card-body">
+        <p>${nl2br(item.result)}</p>
+        ${item.follow_up ? `<div class="issue-action-box"><strong>후속조치·비고</strong><p>${nl2br(item.follow_up)}</p></div>` : ''}
+        ${photos.length ? `<div class="photo-strip">${photos.map((url) => `<a class="photo-thumb" href="${escapeHtml(url)}" target="_blank" rel="noopener"><img src="${escapeHtml(url)}" alt="본사점검 사진" /></a>`).join('')}</div>` : ''}
+      </div>
+      <div class="issue-card-footer"><span>본사 점검자 ${escapeHtml(item.manager_name || '-')}</span><span>최종 업데이트 ${escapeHtml(formatDateTime(item.updated_at))}</span></div>
+    </article>
+  `;
+}
+
 function inventoryCardHtml(item, { editable = true } = {}) {
   const category = inventoryCategoryMeta(item.category);
   const status = inventoryStatusMeta(item.status);
@@ -388,20 +420,20 @@ function bindEditButtons() {
     const item = state.inventories.find((inventory) => inventory.id === button.dataset.editInventory);
     button.addEventListener('click', () => openInventoryEditor(item));
   });
+  $$('[data-edit-head-office]').forEach((button) => {
+    const item = state.headOfficeChecks.find((check) => check.id === button.dataset.editHeadOffice);
+    button.addEventListener('click', () => openHeadOfficeCheckEditor(item));
+  });
 }
 
 function renderIssueLists() {
-  const issueItems = state.issues.filter((item) => item.category !== 'complaint');
-  const complaintItems = state.issues.filter((item) => item.category === 'complaint');
-  const issueFiltered = applyIssueFilter(issueItems, state.issueFilter);
-  const complaintFiltered = applyIssueFilter(complaintItems, state.complaintFilter);
+  const issueFiltered = applyIssueFilter(state.issues, state.issueFilter);
 
-  $('#adminIssueCount').textContent = `전체 ${issueItems.length}건`;
-  $('#adminComplaintCount').textContent = `전체 ${complaintItems.length}건`;
+  $('#adminIssueCount').textContent = `전체 ${state.issues.length}건`;
   $('#adminIssuesList').className = issueFiltered.length ? 'card-list' : 'card-list empty-state';
-  $('#adminComplaintsList').className = complaintFiltered.length ? 'card-list' : 'card-list empty-state';
-  $('#adminIssuesList').innerHTML = issueFiltered.length ? issueFiltered.map((item) => issueCardHtml(item)).join('') : '해당 조건의 조치업무가 없습니다.';
-  $('#adminComplaintsList').innerHTML = complaintFiltered.length ? complaintFiltered.map((item) => issueCardHtml(item)).join('') : '해당 조건의 민원 기록이 없습니다.';
+  $('#adminIssuesList').innerHTML = issueFiltered.length ? issueFiltered.map((item) => issueCardHtml(item)).join('') : '해당 조건의 조치·민원 기록이 없습니다.';
+  $('#adminHeadOfficeChecksList').className = state.headOfficeChecks.length ? 'card-list' : 'card-list empty-state';
+  $('#adminHeadOfficeChecksList').innerHTML = state.headOfficeChecks.length ? state.headOfficeChecks.map((item) => headOfficeCheckCardHtml(item)).join('') : '등록된 본사점검 기록이 없습니다.';
   $('#adminInventoryList').className = state.inventories.length ? 'card-list' : 'card-list empty-state';
   $('#adminInventoryList').innerHTML = state.inventories.length ? state.inventories.map((item) => inventoryCardHtml(item)).join('') : '등록된 시설·비품 현황이 없습니다.';
   bindEditButtons();
@@ -413,8 +445,7 @@ async function loadIssues() {
     renderIssueLists();
   } catch (error) {
     console.error(error);
-    $('#adminIssuesList').innerHTML = '<div class="empty-state">조치업무를 불러오지 못했습니다.</div>';
-    $('#adminComplaintsList').innerHTML = '<div class="empty-state">민원 기록을 불러오지 못했습니다.</div>';
+    $('#adminIssuesList').innerHTML = '<div class="empty-state">조치·민원 기록을 불러오지 못했습니다.</div>';
   }
 }
 
@@ -425,6 +456,16 @@ async function loadInventories() {
   } catch (error) {
     console.error(error);
     $('#adminInventoryList').innerHTML = '<div class="empty-state">시설·비품 현황을 불러오지 못했습니다.</div>';
+  }
+}
+
+async function loadHeadOfficeChecks() {
+  try {
+    state.headOfficeChecks = await data.getHeadOfficeChecks({ start: APP_START_DATE, end: appCurrentDate() });
+    renderIssueLists();
+  } catch (error) {
+    console.error(error);
+    $('#adminHeadOfficeChecksList').innerHTML = '<div class="empty-state">본사점검 기록을 불러오지 못했습니다.</div>';
   }
 }
 
@@ -514,6 +555,83 @@ async function deleteCurrentIssue() {
     await loadIssues();
     showToast('기록을 삭제했습니다.');
   } catch (error) {
+    showToast(error.message || '삭제에 실패했습니다.', 'error');
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+function refreshHeadOfficeCheckPhotos() {
+  renderPhotoPreview($('#headOfficeCheckPhotoPreview'), state.headOfficeCheckPhotos, (index) => {
+    state.headOfficeCheckPhotos.splice(index, 1);
+    refreshHeadOfficeCheckPhotos();
+  });
+}
+
+function openHeadOfficeCheckEditor(item = null) {
+  const maximum = appCurrentDate();
+  $('#headOfficeCheckModalTitle').textContent = item ? '본사점검 기록 수정' : '본사점검 등록';
+  $('#headOfficeCheckModalSubtitle').textContent = '관련 공간은 전체, 상태는 완료로 고정됩니다.';
+  $('#headOfficeCheckId').value = item?.id || '';
+  $('#headOfficeCheckDate').min = APP_START_DATE;
+  $('#headOfficeCheckDate').max = maximum;
+  $('#headOfficeCheckDate').value = clampAppDate(item?.check_date || state.selectedDate || maximum);
+  $('#headOfficeCheckType').value = item?.check_type || 'onsite';
+  $('#headOfficeCheckScope').value = '전체';
+  $('#headOfficeCheckStatus').value = '완료';
+  $('#headOfficeCheckManager').value = item?.manager_name || '';
+  $('#headOfficeCheckTitle').value = item?.title || '';
+  $('#headOfficeCheckResult').value = item?.result || '';
+  $('#headOfficeCheckFollowUp').value = item?.follow_up || '';
+  $('#headOfficeCheckPhotos').value = '';
+  state.headOfficeCheckPhotos = [...safeArray(item?.photo_paths)];
+  refreshHeadOfficeCheckPhotos();
+  $('#deleteHeadOfficeCheckButton').classList.toggle('hidden', !item);
+  openModal($('#headOfficeCheckModal'));
+}
+
+async function saveHeadOfficeCheck(event) {
+  event.preventDefault();
+  const button = $('#saveHeadOfficeCheckButton');
+  setBusy(button, true, '저장 중...');
+  try {
+    const selectedFiles = Array.from($('#headOfficeCheckPhotos').files || []);
+    if (state.headOfficeCheckPhotos.length + selectedFiles.length > 3) throw new Error('사진은 기존 사진을 포함해 최대 3장까지 등록할 수 있습니다.');
+    const uploaded = await data.uploadPhotos(selectedFiles);
+    await data.saveHeadOfficeCheck({
+      id: $('#headOfficeCheckId').value || null,
+      check_date: $('#headOfficeCheckDate').value,
+      check_type: $('#headOfficeCheckType').value,
+      title: $('#headOfficeCheckTitle').value,
+      result: $('#headOfficeCheckResult').value,
+      follow_up: $('#headOfficeCheckFollowUp').value,
+      photo_paths: [...state.headOfficeCheckPhotos, ...uploaded],
+      manager_name: $('#headOfficeCheckManager').value.trim(),
+    });
+    closeModal($('#headOfficeCheckModal'));
+    await loadHeadOfficeChecks();
+    showToast('본사점검 기록을 저장했습니다.');
+  } catch (error) {
+    console.error(error);
+    showToast(error.message || '본사점검 기록 저장에 실패했습니다.', 'error');
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+async function deleteCurrentHeadOfficeCheck() {
+  const id = $('#headOfficeCheckId').value;
+  if (!id) return;
+  if (!window.confirm('이 본사점검 기록을 삭제할까요?')) return;
+  const button = $('#deleteHeadOfficeCheckButton');
+  setBusy(button, true, '삭제 중...');
+  try {
+    await data.deleteHeadOfficeCheck(id);
+    closeModal($('#headOfficeCheckModal'));
+    await loadHeadOfficeChecks();
+    showToast('본사점검 기록을 삭제했습니다.');
+  } catch (error) {
+    console.error(error);
     showToast(error.message || '삭제에 실패했습니다.', 'error');
   } finally {
     setBusy(button, false);
@@ -688,6 +806,11 @@ function bindEvents() {
   $('#deleteIssueButton').addEventListener('click', deleteCurrentIssue);
   $$('[data-close-issue]').forEach((button) => button.addEventListener('click', () => closeModal($('#issueModal'))));
 
+  $('#addHeadOfficeCheckButton').addEventListener('click', () => openHeadOfficeCheckEditor());
+  $('#headOfficeCheckForm').addEventListener('submit', saveHeadOfficeCheck);
+  $('#deleteHeadOfficeCheckButton').addEventListener('click', deleteCurrentHeadOfficeCheck);
+  $$('[data-close-head-office]').forEach((button) => button.addEventListener('click', () => closeModal($('#headOfficeCheckModal'))));
+
   $('#addInventoryButton').addEventListener('click', () => openInventoryEditor());
   $('#inventoryForm').addEventListener('submit', saveInventory);
   $('#deleteInventoryButton').addEventListener('click', deleteCurrentInventory);
@@ -698,16 +821,11 @@ function bindEvents() {
     $$('[data-admin-issue-filter]').forEach((item) => item.classList.toggle('active', item === button));
     renderIssueLists();
   }));
-  $$('[data-admin-complaint-filter]').forEach((button) => button.addEventListener('click', () => {
-    state.complaintFilter = button.dataset.adminComplaintFilter;
-    $$('[data-admin-complaint-filter]').forEach((item) => item.classList.toggle('active', item === button));
-    renderIssueLists();
-  }));
-
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
       closeModal($('#inspectionModal'));
       closeModal($('#issueModal'));
+      closeModal($('#headOfficeCheckModal'));
       closeModal($('#inventoryModal'));
     }
   });
@@ -721,13 +839,13 @@ async function startAdminApp() {
     $('#issueAreaId').innerHTML = options;
     $('#inventoryAreaId').innerHTML = options;
   }
-  await Promise.all([loadDay(), loadIssues(), loadInventories()]);
+  await Promise.all([loadDay(), loadIssues(), loadHeadOfficeChecks(), loadInventories()]);
   if (appStarted) return;
   appStarted = true;
   const indicator = $('#adminLiveIndicator');
   const refresh = debounce(async () => {
     if (state.activeTab === 'inspections') await loadDay();
-    await Promise.all([loadIssues(), loadInventories()]);
+    await Promise.all([loadIssues(), loadHeadOfficeChecks(), loadInventories()]);
   }, 180);
   data.subscribe((event) => {
     if (event.table === 'connection') {

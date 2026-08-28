@@ -15,6 +15,7 @@ import {
   formatKoreanDate,
   formatMonth,
   formatShortDate,
+  headOfficeCheckTypeMeta,
   inventoryCategoryMeta,
   inventoryStatusMeta,
   isOpenIssue,
@@ -41,10 +42,11 @@ const state = {
   reportMonth: monthKey(appCurrentDate()),
   dailyInspections: [],
   dailyIssues: [],
+  dailyHeadOfficeChecks: [],
   allIssues: [],
   allInventories: [],
+  allHeadOfficeChecks: [],
   issueFilter: 'open',
-  complaintFilter: 'open',
   activeTab: 'today',
 };
 
@@ -204,25 +206,37 @@ function compactItemHtml(issue) {
   `;
 }
 
+function compactHeadOfficeCheckHtml(item) {
+  const type = headOfficeCheckTypeMeta(item.check_type);
+  return `
+    <div class="compact-item">
+      <span class="mini-badge ${type.className}">${type.label.slice(0, 1)}</span>
+      <span><strong>${escapeHtml(item.title)}</strong><small>전체 · ${escapeHtml(type.label)} · 완료</small></span>
+      <small>${escapeHtml(formatShortDate(item.check_date))}</small>
+    </div>
+  `;
+}
+
 function renderTodayActivities() {
-  const visible = state.dailyIssues.filter((item) => item.is_public !== false);
-  const issues = visible.filter((item) => item.category !== 'complaint').slice(0, 4);
-  const complaints = visible.filter((item) => item.category === 'complaint').slice(0, 4);
-  $('#todayIssues').className = issues.length ? 'compact-list' : 'compact-list empty-state';
-  $('#todayIssues').innerHTML = issues.length ? issues.map(compactItemHtml).join('') : '등록된 조치업무가 없습니다.';
-  $('#todayComplaints').className = complaints.length ? 'compact-list' : 'compact-list empty-state';
-  $('#todayComplaints').innerHTML = complaints.length ? complaints.map(compactItemHtml).join('') : '등록된 민원이 없습니다.';
+  const visible = state.dailyIssues.filter((item) => item.is_public !== false).slice(0, 5);
+  const headOfficeChecks = state.dailyHeadOfficeChecks.slice(0, 5);
+  $('#todayIssues').className = visible.length ? 'compact-list' : 'compact-list empty-state';
+  $('#todayIssues').innerHTML = visible.length ? visible.map(compactItemHtml).join('') : '등록된 조치·민원이 없습니다.';
+  $('#todayHeadOfficeChecks').className = headOfficeChecks.length ? 'compact-list' : 'compact-list empty-state';
+  $('#todayHeadOfficeChecks').innerHTML = headOfficeChecks.length ? headOfficeChecks.map(compactHeadOfficeCheckHtml).join('') : '등록된 본사점검이 없습니다.';
 }
 
 async function loadDaily() {
   updateSelectedDateLabels();
   try {
-    const [inspections, issues] = await Promise.all([
+    const [inspections, issues, headOfficeChecks] = await Promise.all([
       data.getInspections({ start: state.selectedDate, end: state.selectedDate }),
       data.getIssues({ start: state.selectedDate, end: state.selectedDate }),
+      data.getHeadOfficeChecks({ start: state.selectedDate, end: state.selectedDate }).catch((error) => { console.error(error); return []; }),
     ]);
     state.dailyInspections = inspections;
     state.dailyIssues = issues.filter((item) => item.is_public !== false);
+    state.dailyHeadOfficeChecks = headOfficeChecks;
     renderDailySummary();
     renderInspectionMatrix();
     renderTodayActivities();
@@ -261,6 +275,35 @@ function issueCardHtml(issue) {
         ${photos.length ? `<div class="photo-strip">${photos.map((url) => `<a class="photo-thumb" href="${escapeHtml(url)}" target="_blank" rel="noopener"><img src="${escapeHtml(url)}" alt="증빙 사진" /></a>`).join('')}</div>` : ''}
       </div>
       <div class="issue-card-footer"><span>담당 ${escapeHtml(issue.manager_name || '-')}</span><span>최종 업데이트 ${escapeHtml(formatDateTime(issue.updated_at))}</span></div>
+    </article>
+  `;
+}
+
+function headOfficeCheckCardHtml(item) {
+  const type = headOfficeCheckTypeMeta(item.check_type);
+  const photos = safeArray(item.photo_paths).map((path) => data.resolvePhotoUrl(path)).filter(Boolean);
+  return `
+    <article class="issue-card">
+      <div class="issue-card-head">
+        <div class="issue-card-title">
+          <div class="issue-badges">
+            <span class="badge type-${type.className}">${type.label}</span>
+            <span class="badge status-completed">완료</span>
+          </div>
+          <h3>${escapeHtml(item.title)}</h3>
+        </div>
+      </div>
+      <div class="issue-card-meta">
+        <span>관련 공간 전체</span>
+        <span>점검일 ${escapeHtml(formatShortDate(item.check_date))}</span>
+        <span>형태 ${escapeHtml(type.label)}</span>
+      </div>
+      <div class="issue-card-body">
+        <p>${nl2br(item.result)}</p>
+        ${item.follow_up ? `<div class="issue-action-box"><strong>후속조치·비고</strong><p>${nl2br(item.follow_up)}</p></div>` : ''}
+        ${photos.length ? `<div class="photo-strip">${photos.map((url) => `<a class="photo-thumb" href="${escapeHtml(url)}" target="_blank" rel="noopener"><img src="${escapeHtml(url)}" alt="본사점검 사진" /></a>`).join('')}</div>` : ''}
+      </div>
+      <div class="issue-card-footer"><span>본사 점검자 ${escapeHtml(item.manager_name || '-')}</span><span>최종 업데이트 ${escapeHtml(formatDateTime(item.updated_at))}</span></div>
     </article>
   `;
 }
@@ -305,14 +348,10 @@ async function loadAllIssues() {
   try {
     const issues = await data.getIssues({ start: APP_START_DATE, end: appCurrentDate() });
     state.allIssues = issues.filter((item) => item.is_public !== false);
-    const openIssueCount = state.allIssues.filter((item) => item.category !== 'complaint' && isOpenIssue(item)).length;
-    const openComplaintCount = state.allIssues.filter((item) => item.category === 'complaint' && isOpenIssue(item)).length;
+    const openCount = state.allIssues.filter(isOpenIssue).length;
     const issueBadge = $('#issueTabCount');
-    const complaintBadge = $('#complaintTabCount');
-    issueBadge.textContent = openIssueCount;
-    complaintBadge.textContent = openComplaintCount;
-    issueBadge.classList.toggle('hidden', !openIssueCount);
-    complaintBadge.classList.toggle('hidden', !openComplaintCount);
+    issueBadge.textContent = openCount;
+    issueBadge.classList.toggle('hidden', !openCount);
   } catch (error) {
     console.error(error);
   }
@@ -327,14 +366,29 @@ async function loadAllInventories() {
   }
 }
 
-function renderIssueList(category, filter, targetId) {
-  const items = state.allIssues.filter((item) => category === 'complaint' ? item.category === 'complaint' : item.category !== 'complaint');
-  const filtered = applyIssueFilter(items, filter);
+async function loadAllHeadOfficeChecks() {
+  try {
+    state.allHeadOfficeChecks = await data.getHeadOfficeChecks({ start: APP_START_DATE, end: appCurrentDate() });
+  } catch (error) {
+    console.error(error);
+  }
+}
+
+function renderIssueList(filter, targetId = 'issuesList') {
+  const filtered = applyIssueFilter(state.allIssues, filter);
   const target = document.getElementById(targetId);
   target.className = filtered.length ? 'card-list' : 'card-list empty-state';
   target.innerHTML = filtered.length
     ? filtered.map((item) => issueCardHtml(item)).join('')
-    : category === 'complaint' ? '해당 조건의 민원 기록이 없습니다.' : '해당 조건의 조치업무가 없습니다.';
+    : '해당 조건의 조치·민원 기록이 없습니다.';
+}
+
+function renderHeadOfficeCheckList() {
+  const target = $('#headOfficeChecksList');
+  target.className = state.allHeadOfficeChecks.length ? 'card-list' : 'card-list empty-state';
+  target.innerHTML = state.allHeadOfficeChecks.length
+    ? state.allHeadOfficeChecks.map((item) => headOfficeCheckCardHtml(item)).join('')
+    : '등록된 본사점검 기록이 없습니다.';
 }
 
 function renderInventoryList() {
@@ -427,10 +481,11 @@ async function loadMonthlyReport() {
   $('#reportPrevMonth').disabled = month <= APP_START_MONTH;
   $('#reportNextMonth').disabled = month >= currentMonth;
   try {
-    const [inspections, issues, inventories] = end < start ? [[], [], []] : await Promise.all([
+    const [inspections, issues, inventories, headOfficeChecks] = end < start ? [[], [], [], []] : await Promise.all([
       data.getInspections({ start, end }),
       data.getIssues({ start, end }),
       data.getInventories({ start, end }),
+      data.getHeadOfficeChecks({ start, end }),
     ]);
     const publicIssues = issues.filter((item) => item.is_public !== false);
     const publicInventories = inventories.filter((item) => item.is_public !== false);
@@ -445,8 +500,8 @@ async function loadMonthlyReport() {
     $('#monthlySummary').innerHTML = `
       <article class="summary-card success"><span class="summary-label"><i class="summary-icon">%</i>점검 입력률</span><strong>${rate}<small>%</small></strong><p>${inspections.length}건 / 기준 ${possible || 0}건</p></article>
       <article class="summary-card"><span class="summary-label"><i class="summary-icon">✓</i>정상·완료 점검</span><strong>${normal}<small>건</small></strong><p>전체 점검 중 정상 관리 건수</p></article>
-      <article class="summary-card progress-card"><span class="summary-label"><i class="summary-icon">!</i>시설·안전 조치</span><strong>${actions.length}<small>건</small></strong><p>해당 월 접수 기준</p></article>
-      <article class="summary-card"><span class="summary-label"><i class="summary-icon">◌</i>민원·비품</span><strong>${complaints.length + publicInventories.length}<small>건</small></strong><p>민원 ${complaints.length}건 · 비품 ${publicInventories.length}건</p></article>
+      <article class="summary-card progress-card"><span class="summary-label"><i class="summary-icon">!</i>조치·민원</span><strong>${publicIssues.length}<small>건</small></strong><p>조치 ${actions.length}건 · 민원 ${complaints.length}건</p></article>
+      <article class="summary-card"><span class="summary-label"><i class="summary-icon">◆</i>본사점검·비품</span><strong>${headOfficeChecks.length + publicInventories.length}<small>건</small></strong><p>본사점검 ${headOfficeChecks.length}건 · 비품 ${publicInventories.length}건</p></article>
     `;
 
     const areaRows = state.areas.map((area) => {
@@ -459,11 +514,19 @@ async function loadMonthlyReport() {
     }).join('');
     $('#areaReportTable').innerHTML = `<table class="data-table"><thead><tr><th>관리 공간</th><th>오전</th><th>오후</th><th>합계</th><th>입력률</th></tr></thead><tbody>${areaRows}</tbody></table>`;
 
-    const activity = [...publicIssues, ...publicInventories.map((item) => ({
-      category: 'other', title: `[비품] ${item.name}`, area_id: item.area_id, received_date: item.record_date, status: 'completed',
-    }))].slice(0, 10);
+    const activity = [
+      ...publicIssues.map((item) => ({ kind: 'issue', date: item.received_date, item })),
+      ...headOfficeChecks.map((item) => ({ kind: 'head-office', date: item.check_date, item })),
+      ...publicInventories.map((item) => ({
+        kind: 'issue',
+        date: item.record_date,
+        item: { category: 'other', title: `[비품] ${item.name}`, area_id: item.area_id, received_date: item.record_date, status: 'completed' },
+      })),
+    ].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 10);
     $('#monthlyActivityList').className = activity.length ? 'compact-list' : 'compact-list empty-state';
-    $('#monthlyActivityList').innerHTML = activity.length ? activity.map(compactItemHtml).join('') : '해당 월에 등록된 조치·민원 기록이 없습니다.';
+    $('#monthlyActivityList').innerHTML = activity.length
+      ? activity.map((entry) => entry.kind === 'head-office' ? compactHeadOfficeCheckHtml(entry.item) : compactItemHtml(entry.item)).join('')
+      : '해당 월에 등록된 관리 기록이 없습니다.';
   } catch (error) {
     console.error(error);
   }
@@ -479,8 +542,8 @@ function showTab(tab) {
   $$('[data-tab]').forEach((button) => button.classList.toggle('active', button.dataset.tab === tab));
   history.replaceState(null, '', `#${tab}`);
   if (tab === 'calendar') loadCalendar();
-  if (tab === 'issues') renderIssueList('issue', state.issueFilter, 'issuesList');
-  if (tab === 'complaints') renderIssueList('complaint', state.complaintFilter, 'complaintsList');
+  if (tab === 'issues') renderIssueList(state.issueFilter);
+  if (tab === 'head-office') renderHeadOfficeCheckList();
   if (tab === 'inventory') renderInventoryList();
   if (tab === 'report') loadMonthlyReport();
 }
@@ -541,23 +604,17 @@ function bindEvents() {
   $$('[data-issue-filter]').forEach((button) => button.addEventListener('click', () => {
     state.issueFilter = button.dataset.issueFilter;
     $$('[data-issue-filter]').forEach((item) => item.classList.toggle('active', item === button));
-    renderIssueList('issue', state.issueFilter, 'issuesList');
+    renderIssueList(state.issueFilter);
   }));
-  $$('[data-complaint-filter]').forEach((button) => button.addEventListener('click', () => {
-    state.complaintFilter = button.dataset.complaintFilter;
-    $$('[data-complaint-filter]').forEach((item) => item.classList.toggle('active', item === button));
-    renderIssueList('complaint', state.complaintFilter, 'complaintsList');
-  }));
-
   $$('[data-close-modal]').forEach((button) => button.addEventListener('click', () => closeModal($('#detailModal'))));
   document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeModal($('#detailModal')); });
 }
 
 async function refreshVisibleData() {
-  await Promise.all([loadAllIssues(), loadAllInventories(), loadDaily()]);
+  await Promise.all([loadAllIssues(), loadAllInventories(), loadAllHeadOfficeChecks(), loadDaily()]);
   if (state.activeTab === 'calendar') await loadCalendar();
-  if (state.activeTab === 'issues') renderIssueList('issue', state.issueFilter, 'issuesList');
-  if (state.activeTab === 'complaints') renderIssueList('complaint', state.complaintFilter, 'complaintsList');
+  if (state.activeTab === 'issues') renderIssueList(state.issueFilter);
+  if (state.activeTab === 'head-office') renderHeadOfficeCheckList();
   if (state.activeTab === 'inventory') renderInventoryList();
   if (state.activeTab === 'report') await loadMonthlyReport();
 }
@@ -569,9 +626,11 @@ async function bootstrap() {
   const connection = await data.init();
   renderModeBanner(connection);
   state.areas = await data.getAreas();
-  await Promise.all([loadDaily(), loadAllIssues(), loadAllInventories()]);
+  await Promise.all([loadDaily(), loadAllIssues(), loadAllInventories(), loadAllHeadOfficeChecks()]);
 
-  const initialTab = ['today', 'calendar', 'issues', 'complaints', 'inventory', 'report'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'today';
+  const requestedTab = location.hash.slice(1);
+  const normalizedTab = ['complaints', 'actions'].includes(requestedTab) ? 'issues' : requestedTab;
+  const initialTab = ['today', 'calendar', 'issues', 'head-office', 'inventory', 'report'].includes(normalizedTab) ? normalizedTab : 'today';
   showTab(initialTab);
 
   const live = $('#liveIndicator');

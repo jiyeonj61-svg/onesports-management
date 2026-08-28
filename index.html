@@ -6,11 +6,11 @@
   <meta name="theme-color" content="#0f766e" />
   <meta name="description" content="(주)원스포츠 힐스테이트 상도 센트럴파크 1단지 휘트니스센터 실시간 관리현황" />
   <title>원스포츠 휘트니스센터 관리현황</title>
-  <link rel="manifest" href="/manifest.webmanifest?v=20260828-6" />
+  <link rel="manifest" href="/manifest.webmanifest?v=20260828-8" />
   <link rel="icon" href="/icons/favicon.png" type="image/png" />
   <link rel="apple-touch-icon" href="/icons/icon-192.png" />
-  <link rel="stylesheet" href="/assets/styles.css?v=20260828-6" />
-  <script src="/config.js?v=20260828-6"></script>
+  <link rel="stylesheet" href="/assets/styles.css?v=20260828-8" />
+  <script src="/config.js?v=20260828-8"></script>
   <script>
     (function () {
       let pendingMessage = '';
@@ -65,7 +65,7 @@
       <div>
         <p class="eyebrow">FITNESS CENTER MANAGEMENT</p>
         <h1 id="pageTitle">휘트니스센터 관리현황</h1>
-        <p>공간별 오전·오후 점검, 시설 조치 및 민원 처리 현황을 실시간으로 확인할 수 있습니다.</p>
+        <p>공간별 오전·오후 점검, 조치·민원, 본사점검 및 시설비품 현황을 실시간으로 확인할 수 있습니다.</p>
 
       </div>
       <div class="hero-date">
@@ -77,8 +77,8 @@
     <nav class="section-tabs desktop-tabs" aria-label="관리현황 메뉴">
       <button class="tab-button active" data-tab="today" type="button"><span>오늘 관리</span></button>
       <button class="tab-button" data-tab="calendar" type="button"><span>캘린더</span></button>
-      <button class="tab-button" data-tab="issues" type="button"><span>조치 현황</span><b id="issueTabCount" class="count-badge hidden">0</b></button>
-      <button class="tab-button" data-tab="complaints" type="button"><span>민원 사항</span><b id="complaintTabCount" class="count-badge hidden">0</b></button>
+      <button class="tab-button" data-tab="issues" type="button"><span>조치·민원현황</span><b id="issueTabCount" class="count-badge hidden">0</b></button>
+      <button class="tab-button" data-tab="head-office" type="button"><span>본사점검현황</span></button>
       <button class="tab-button" data-tab="inventory" type="button"><span>시설비품현황</span></button>
       <button class="tab-button" data-tab="report" type="button"><span>월간 보고</span></button>
     </nav>
@@ -123,23 +123,23 @@
         <article class="panel compact-panel">
           <div class="panel-header inline">
             <div>
-              <h3>당일 주요 조치</h3>
-              <p>진행 중이거나 완료된 시설·안전 업무</p>
+              <h3>당일 조치·민원</h3>
+              <p>시설 조치와 민원 처리상태를 함께 확인</p>
             </div>
             <button class="text-button" data-tab-link="issues" type="button">전체 보기</button>
           </div>
-          <div id="todayIssues" class="compact-list empty-state">등록된 내역이 없습니다.</div>
+          <div id="todayIssues" class="compact-list empty-state">등록된 조치·민원이 없습니다.</div>
         </article>
 
         <article class="panel compact-panel">
           <div class="panel-header inline">
             <div>
-              <h3>당일 민원 사항</h3>
-              <p>접수부터 완료까지 처리상태 공개</p>
+              <h3>당일 본사점검</h3>
+              <p>현장점검 및 서면보고 완료 결과</p>
             </div>
-            <button class="text-button" data-tab-link="complaints" type="button">전체 보기</button>
+            <button class="text-button" data-tab-link="head-office" type="button">전체 보기</button>
           </div>
-          <div id="todayComplaints" class="compact-list empty-state">등록된 민원이 없습니다.</div>
+          <div id="todayHeadOfficeChecks" class="compact-list empty-state">등록된 본사점검이 없습니다.</div>
         </article>
       </div>
     </section>
@@ -173,35 +173,34 @@
     <section id="view-issues" class="app-view" data-view="issues" hidden>
       <div class="section-toolbar">
         <div>
-          <p class="section-kicker">ACTION TRACKER</p>
-          <h2>시설·안전 조치 현황</h2>
+          <p class="section-kicker">ACTION &amp; COMPLAINTS</p>
+          <h2>조치·민원 현황</h2>
         </div>
-        <div class="filter-group" role="group" aria-label="조치상태 필터">
+        <div class="filter-group" role="group" aria-label="조치·민원 상태 필터">
           <button class="filter-button active" data-issue-filter="open" type="button">진행 중</button>
           <button class="filter-button" data-issue-filter="completed" type="button">완료</button>
           <button class="filter-button" data-issue-filter="all" type="button">전체</button>
         </div>
       </div>
+      <div class="privacy-notice">
+        <strong>개인정보 보호 안내</strong>
+        <span>민원인의 이름·연락처는 표시하지 않으며, 조치·민원 내용과 처리 결과만 공개합니다.</span>
+      </div>
       <div id="issuesList" class="card-list loading-block"></div>
     </section>
 
-    <section id="view-complaints" class="app-view" data-view="complaints" hidden>
+    <section id="view-head-office" class="app-view" data-view="head-office" hidden>
       <div class="section-toolbar">
         <div>
-          <p class="section-kicker">COMPLAINTS</p>
-          <h2>민원 접수 및 처리현황</h2>
-        </div>
-        <div class="filter-group" role="group" aria-label="민원상태 필터">
-          <button class="filter-button active" data-complaint-filter="open" type="button">처리 중</button>
-          <button class="filter-button" data-complaint-filter="completed" type="button">완료</button>
-          <button class="filter-button" data-complaint-filter="all" type="button">전체</button>
+          <p class="section-kicker">HEAD OFFICE CHECK</p>
+          <h2>본사점검현황</h2>
         </div>
       </div>
       <div class="privacy-notice">
-        <strong>개인정보 보호 안내</strong>
-        <span>민원인의 이름·연락처는 표시하지 않으며, 민원 내용과 조치 결과만 공개합니다.</span>
+        <strong>본사 점검 안내</strong>
+        <span>관련 공간은 전체이며, 현장점검 또는 서면보고를 완료한 결과를 공개합니다.</span>
       </div>
-      <div id="complaintsList" class="card-list loading-block"></div>
+      <div id="headOfficeChecksList" class="card-list loading-block"></div>
     </section>
 
     <section id="view-inventory" class="app-view" data-view="inventory" hidden>
@@ -247,8 +246,8 @@
         <article class="panel">
           <div class="panel-header">
             <div>
-              <h3>주요 조치 및 민원</h3>
-              <p>해당 월에 접수된 관리업무 요약</p>
+              <h3>주요 관리활동</h3>
+              <p>조치·민원·본사점검·시설비품 요약</p>
             </div>
           </div>
           <div id="monthlyActivityList" class="compact-list"></div>
@@ -267,8 +266,8 @@
   <nav class="mobile-nav" aria-label="모바일 관리현황 메뉴">
     <button class="mobile-tab active" data-tab="today" type="button"><span class="nav-icon">●</span><span>오늘</span></button>
     <button class="mobile-tab" data-tab="calendar" type="button"><span class="nav-icon">▦</span><span>캘린더</span></button>
-    <button class="mobile-tab" data-tab="issues" type="button"><span class="nav-icon">!</span><span>조치</span></button>
-    <button class="mobile-tab" data-tab="complaints" type="button"><span class="nav-icon">◌</span><span>민원</span></button>
+    <button class="mobile-tab" data-tab="issues" type="button"><span class="nav-icon">!</span><span>조치·민원</span></button>
+    <button class="mobile-tab" data-tab="head-office" type="button"><span class="nav-icon">◆</span><span>본사점검</span></button>
     <button class="mobile-tab" data-tab="inventory" type="button"><span class="nav-icon">▣</span><span>비품</span></button>
     <button class="mobile-tab" data-tab="report" type="button"><span class="nav-icon">▤</span><span>보고</span></button>
   </nav>
@@ -282,6 +281,6 @@
   </div>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script type="module" src="/assets/viewer.js?v=20260828-6" onerror="window.__onesportsBootFail('메인 스크립트 파일을 불러오지 못했습니다.')"></script>
+  <script type="module" src="/assets/viewer.js?v=20260828-8" onerror="window.__onesportsBootFail('메인 스크립트 파일을 불러오지 못했습니다.')"></script>
 </body>
 </html>

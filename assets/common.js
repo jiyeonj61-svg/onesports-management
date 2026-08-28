@@ -61,6 +61,11 @@ export const INVENTORY_CATEGORY = {
   other: { label: '기타', className: 'other' },
 };
 
+export const HEAD_OFFICE_CHECK_TYPE = {
+  onsite: { label: '현장점검', className: 'onsite' },
+  written: { label: '서면보고', className: 'written' },
+};
+
 export const PRIORITY_META = {
   low: { label: '낮음', className: 'low' },
   normal: { label: '보통', className: 'normal-priority' },
@@ -207,6 +212,10 @@ export function inventoryStatusMeta(status) {
 
 export function inventoryCategoryMeta(category) {
   return INVENTORY_CATEGORY[category] || INVENTORY_CATEGORY.other;
+}
+
+export function headOfficeCheckTypeMeta(type) {
+  return HEAD_OFFICE_CHECK_TYPE[type] || HEAD_OFFICE_CHECK_TYPE.onsite;
 }
 
 export function priorityMeta(priority) {

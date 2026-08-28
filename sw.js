@@ -1,4 +1,4 @@
-const CACHE_NAME = 'onesports-management-v7-20260828';
+const CACHE_NAME = 'onesports-management-v8-20260828';
 const APP_SHELL = [
   '/',
   '/index.html',
