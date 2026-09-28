@@ -9,9 +9,9 @@
   <title>원스포츠 회원서비스</title>
   <link rel="icon" href="/icons/favicon.png" type="image/png" />
   <link rel="apple-touch-icon" href="/icons/icon-192.png" />
-  <link rel="stylesheet" href="/assets/styles.css?v=20260928-members-1" />
-  <link rel="stylesheet" href="/assets/member-service.css?v=20260928-members-1" />
-  <script src="/config.js?v=20260928-members-1"></script>
+  <link rel="stylesheet" href="/assets/styles.css?v=20260928-guest-2" />
+  <link rel="stylesheet" href="/assets/member-service.css?v=20260928-guest-2" />
+  <script src="/config.js?v=20260928-guest-2"></script>
 </head>
 <body class="member-page">
   <a class="member-skip" href="#memberContent">본문으로 바로가기</a>
@@ -22,7 +22,7 @@
         <img class="brand-logo" src="/assets/onesports-logo.png" alt="원스포츠" width="386" height="122" />
         <span class="member-brand-label">회원서비스</span>
       </a>
-      <button id="memberAccount" class="member-text-button" type="button">로그인</button>
+      <a class="member-text-button" href="/members/my" data-member-route>접수 조회</a>
     </div>
   </header>
   <main id="memberContent" class="member-container member-main" tabindex="-1" aria-busy="true">
@@ -31,11 +31,11 @@
   <footer class="member-container member-footer">
     <strong id="memberCenterName">힐스테이트 상도 센트럴파크 1단지</strong>
     <span id="memberContact"></span>
-    <p>QR은 회원 페이지로 연결합니다. 이용권 조회와 신청에는 본인 계정 확인이 필요합니다.</p>
+    <p>가입 없이 신청할 수 있습니다. 내 접수내용은 접수번호와 비공개 확인키로 조회합니다.</p>
   </footer>
   <nav id="memberNav" class="member-bottom-nav" aria-label="회원 메뉴"></nav>
   <div id="memberToast" class="member-toast" role="status" aria-live="polite" hidden></div>
   <noscript><p class="member-container">회원서비스를 이용하려면 브라우저의 JavaScript를 켜 주세요.</p></noscript>
-  <script type="module" src="/assets/members.js?v=20260928-members-1"></script>
+  <script type="module" src="/assets/members.js?v=20260928-guest-2"></script>
 </body>
 </html>

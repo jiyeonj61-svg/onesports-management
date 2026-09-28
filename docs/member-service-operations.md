@@ -1,5 +1,7 @@
 # 회원서비스 DB 적용·복구 안내
 
+> 기본 회원서비스 설치 기록입니다. 현재 회원 화면은 계정 없는 접수 방식으로 전환했습니다. 기본 설치 후 `guest-service.sql`을 추가 적용하며, 최신 운영 절차는 [비로그인 접수 안내](guest-service-operations.md)를 따릅니다. 회원 Auth 가입·초대·인증메일·복귀주소 설정은 새 회원 화면에 필요하지 않습니다.
+
 ## 대상 확인
 
 기존 OneSports Vercel 사이트는 `https://onesports-management.vercel.app`이고 저장소의 기존 Supabase 프로젝트 참조는 `csacwkwasjntfkzinzfg`입니다. Supabase 대시보드 표시 이름이 다른 프로그램처럼 보일 수 있으므로 표시 이름만으로 판단하지 마세요. 실제 프로젝트 참조, 기존 `public.app_admins`와 기존 운영 테이블의 구조 및 현재 원스포츠 화면 연결을 함께 확인합니다. 이 프로젝트는 현재 하나의 센터를 사용하며 기존 승인 관리자 목록을 그대로 사용합니다.

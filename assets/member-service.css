@@ -89,6 +89,12 @@
 .member-number { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
 .member-reply { padding: 16px; border-left: 3px solid var(--brand); background: #f1f8f5; margin-top: 14px; border-radius: 0 10px 10px 0; }
 .member-signature { width: 100%; height: 156px; background: #fff; border: 1px solid var(--line-strong); border-radius: 10px; touch-action: none; display: block; }
+.member-form-fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+.member-form-fieldset:disabled input, .member-form-fieldset:disabled select, .member-form-fieldset:disabled textarea { background: #f5f7f6; color: #76817c; cursor: not-allowed; }
+.member-honeypot { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }
+.member-receipt-key { display: block; padding: 14px; margin-block: 12px; border: 1px solid var(--line); border-radius: 9px; background: #f5f8f7; white-space: normal; overflow-wrap: anywhere; font-size: 15px; letter-spacing: .02em; }
+.member-receipt summary { cursor: pointer; min-height: 40px; padding-block: 8px; }
+.member-submitted-profile { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 10px; }
 .member-success-mark { width: 48px; height: 48px; background: var(--brand-soft); color: var(--brand); display: grid; place-items: center; border-radius: 50%; font-size: 28px; margin-bottom: 16px; }
 .member-footer { display: grid; gap: 5px; font-size: 12px; color: var(--muted); padding-block: 16px 26px; }
 .member-footer p { margin: 4px 0 0; line-height: 1.7; }

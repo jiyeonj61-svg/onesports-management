@@ -1,5 +1,7 @@
 # Member service RPC contract
 
+> 기본 관리자·공개 게시판 및 이전 인증 회원 API의 계약입니다. 현재 회원 화면의 신청·건의·접수 조회는 별도 `guest_service`를 사용하며, 회원 계정이나 초대 연결을 요구하지 않습니다. 최신 흐름은 [비로그인 접수 운영 안내](guest-service-operations.md)를 참조하세요.
+
 All calls: `supabase.rpc('member_service', { action, payload })`. Successful JSON includes `ok:true`. Validation/authorization uses PostgreSQL errors (`error.message`). Invite failures return `{ok:false,error}` so rate-limit attempts persist; clients must check both transport errors and `ok`.
 
 ## Public and member actions

@@ -4,12 +4,13 @@
 
 ## 2026-09-28 회원서비스 추가
 
-- `/members`: 회원 안내 게시판, 빠른 연장·재등록, 비공개 건의, 본인 처리내역
+- `/members`: 회원 안내 게시판, 가입·로그인 없는 연장·재등록과 비공개 건의, 접수번호·확인키 조회
 - 기존 `/admin`에 회원·이용권, 신청·결제, GX, 게시판, 건의, 회원서비스 설정 추가
-- 기존 운영 DB에는 **`supabase/member-service.sql`만** 적용합니다. 아래 과거 설치/업데이트 절차를 다시 실행하지 마세요.
+- 회원서비스가 이미 설치된 운영 DB에는 **`supabase/guest-service.sql`**을 추가 적용합니다. 신규 설치는 `member-service.sql` 다음 `guest-service.sql` 순서입니다. 아래 과거 설치/업데이트 절차를 다시 실행하지 마세요.
 - [DB 적용·복구 안내](docs/member-service-operations.md), [API 계약](docs/member-service-contract.md)
+- [비로그인 접수 운영 안내](docs/guest-service-operations.md). 회원용 계정·초대·인증메일 설정은 필요하지 않으며 관리자 로그인은 유지합니다.
 - 최초 신청·건의 접수는 꺼져 있습니다. 요금·GX 정원과 일정·개인정보 보유기간·승인된 동의문을 운영자가 확인한 후 엽니다.
-- 검증: `npm ci`, `npm test`, `npm run test:db`, `node tests/backend-security.mjs`. DB 테스트 두 명령은 분리된 로컬 PostgreSQL을 사용하므로 순서대로 실행합니다.
+- 검증: `npm ci`, `npm test`, `npm run test:db`, `node tests/backend-security.mjs`, `node tests/guest-service.mjs`. DB 테스트는 분리된 로컬 PostgreSQL의 같은 포트를 사용하므로 순서대로 실행합니다.
 
 ## 이번 적용 버전
 

@@ -15,7 +15,7 @@ function harness() {
     service: () => { throw new Error('Network access is forbidden in unit tests'); },
     Date, Intl, console,
   });
-  vm.runInContext(`${source}\nglobalThis.functions = { parseCsv, addDays, expectedPeriod, filterRows, kstIso, localDateTime, field, statusGrid, memberUrl, state };`, context);
+  vm.runInContext(`${source}\nglobalThis.functions = { parseCsv, addDays, expectedPeriod, filterRows, kstIso, localDateTime, field, statusGrid, memberUrl, state, guestApplication, guestRequest, guestPhotoSource, validateGuestMatch, renderApplications, renderRequests, renderProfiles };`, context);
   return context.functions;
 }
 const plain = value => JSON.parse(JSON.stringify(value));
@@ -100,4 +100,86 @@ test('admin fields escape text and the shared member QR contains no personal inf
   assert.equal(memberUrl(), 'https://onesports-management.vercel.app/members');
   assert.equal(new URL(memberUrl()).search, '');
   assert.equal(new URL(memberUrl()).hash, '');
+});
+
+test('unlinked guest application stays an unverified intake with no payment or pass approval control', () => {
+  const { state, guestApplication, statusGrid, renderApplications } = harness();
+  const receipt = {
+    id: 'intake-1', receipt_no: 'G-20261001-ABC', status: 'received', amount: 30000,
+    profile_snapshot: { name: '<입력한 이름>', building: '101', unit: '101', phone: '01000000000' },
+    product_snapshot: { name: '헬스 30일', duration_days: 30 },
+    application_payload: { kind: 'renewal', payment_method: 'transfer', product_id: 'fitness-30', desired_start_date: '2026-10-01' },
+  };
+  const row = guestApplication(receipt);
+  assert.equal(row.payment_status, undefined);
+  assert.equal(row.pass_status, undefined);
+  assert.match(statusGrid(row), /미확인·미반영/);
+  assert.match(statusGrid(row), /관리자 확인·연결 대기/);
+  state.lists.guest_applications = [receipt]; state.lists.applications = [];
+  const root = { innerHTML: '' }; renderApplications(root);
+  assert.match(root.innerHTML, /data-ms-command="guest-application"/);
+  assert.match(root.innerHTML, /&lt;입력한 이름&gt;/);
+  assert.doesNotMatch(root.innerHTML, /data-app-action="approve"|자동 승인|연장 완료/);
+});
+
+test('guest GX intake never claims a reserved seat before conversion', () => {
+  const { guestApplication, statusGrid } = harness();
+  const row = guestApplication({ id: 'gx-intake', status: 'received', application_payload: { gx_class_id: 'class-1', payment_method: 'transfer' }, profile_snapshot: {} });
+  assert.match(statusGrid(row), /GX 자리/);
+  assert.match(statusGrid(row), /미배정·입금 안내 전/);
+});
+
+test('converted guest intake displays the existing financial workflow once without duplicate cards', () => {
+  const { state, renderApplications, guestApplication } = harness();
+  state.lists.applications = [{ id: 'original-app', application_no: 'A-1', member_id: 'member-1', application_status: 'completed', payment_status: 'confirmed', pass_status: 'applied', external_status: 'pending', amount: 30000, created_at: '2026-10-01T00:00:00Z' }];
+  const receipt = { id: 'intake-1', receipt_no: 'G-1', status: 'converted', linked_application_id: 'original-app', application_payload: { payment_method: 'card' }, profile_snapshot: { name: '접수인' }, created_at: '2026-10-01T00:00:00Z' };
+  state.lists.guest_applications = [receipt];
+  assert.equal(guestApplication(receipt).pass_status, 'applied');
+  const root = { innerHTML: '' }; renderApplications(root);
+  assert.equal((root.innerHTML.match(/<article class="ms-card/g) || []).length, 1);
+  assert.match(root.innerHTML, /연결된 신청·처리 확인/);
+  assert.match(root.innerHTML, /이용권 반영 완료/);
+});
+
+test('guest matching requires explicit selected member and real-world confirmation but no member account', () => {
+  const { validateGuestMatch } = harness();
+  assert.throws(() => validateGuestMatch(null, true), /직접 선택/);
+  assert.throws(() => validateGuestMatch({ id: 'a', active: false }, true), /사용 중지/);
+  assert.throws(() => validateGuestMatch({ id: 'a', active: true }, false), /현장 확인/);
+  const pending = validateGuestMatch({ id: 'a', active: true, user_id: null, resident_verified: false, approved: false }, true);
+  assert.deepEqual(plain(pending), { memberId: 'a', needsVerification: true });
+  const verified = validateGuestMatch({ id: 'a', active: true, user_id: null, resident_verified: true, approved: true }, true);
+  assert.equal(verified.needsVerification, false);
+});
+
+test('guest request payload is escaped and kept in a private receipt workflow', () => {
+  const { state, guestRequest, renderRequests, filterRows } = harness();
+  const receipt = { id: 'request-1', receipt_no: 'R-1', status: 'received', profile_snapshot: { name: '접수인' }, request_payload: { title: '<script>내용</script>', body: '기구 확인 요청', category_id: 'equipment', location: '헬스장' }, created_at: '2026-10-01T00:00:00Z' };
+  state.lists.guest_requests = [receipt]; state.lists.requests = []; state.lists.categories = [];
+  const root = { innerHTML: '' }; renderRequests(root);
+  assert.match(root.innerHTML, /&lt;script&gt;내용&lt;\/script&gt;/);
+  assert.match(root.innerHTML, /비공개/);
+  assert.match(root.innerHTML, /data-ms-command="guest-request"/);
+  state.filters.requests = { source: 'guest', location: '헬스장' };
+  assert.equal(filterRows('requests', [guestRequest(receipt), { id: 'legacy', location: '헬스장' }]).length, 1);
+});
+
+test('guest photo display accepts only bounded image data, never HTML or active SVG', () => {
+  const { guestPhotoSource } = harness();
+  assert.equal(guestPhotoSource({ mime: 'image/jpeg', base64: 'YWJj' }), 'data:image/jpeg;base64,YWJj');
+  assert.equal(guestPhotoSource({ mime: 'image/jpeg', base64: 'YW\nJj' }), 'data:image/jpeg;base64,YWJj');
+  assert.throws(() => guestPhotoSource({ mime: 'image/svg+xml', base64: 'YWJj' }), /사진 형식/);
+  assert.throws(() => guestPhotoSource({ mime: 'text/html', base64: 'YWJj' }), /사진 형식/);
+  assert.throws(() => guestPhotoSource({ mime: 'image/png', base64: '<script>' }), /사진 형식/);
+  assert.throws(() => guestPhotoSource({ mime: 'image/png', base64: 'A'.repeat(720001) }), /사진 형식/);
+});
+
+test('profile administration does not offer member account invitations or unlinked-account labels', () => {
+  const { state, renderProfiles } = harness();
+  state.lists.profiles = [{ id: 'a', name: '회원', building: '101', unit: '101', phone: '01000000000', user_id: null, active: true }];
+  state.lists.passes = []; state.lists.profile_changes = [];
+  const root = { innerHTML: '' }; renderProfiles(root);
+  assert.doesNotMatch(root.innerHTML, /초대코드|계정 연결|미연결|이메일/);
+  assert.match(root.innerHTML, /가입·로그인 없이/);
+  assert.match(root.innerHTML, /현장 확인/);
 });

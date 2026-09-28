@@ -1,151 +1,122 @@
-// Isolated rendering fixtures only. These tests never call a real service or create accounts.
+// Isolated UI fixtures: no real Auth, database, personal records or network writes.
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { webcrypto } from 'node:crypto';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-const source = readFileSync(new URL('../assets/members.js', import.meta.url), 'utf8')
-  .replace(/^import[^\n]+\n/, '')
-  .replace(/boot\(\);\s*$/, 'globalThis.inspect={state,renderHome,renderRenew,renderAuth,renderRequests,renderMy,applicationCard,requestCard,selectionChanged,addDays,refreshMine,signupAvailable,createMemberAccount};');
-
+const original = readFileSync(new URL('../assets/members.js', import.meta.url),'utf8');
+const source = original.replace(/^import[^\n]+\n/,'').replace(/boot\(\);\s*$/,'globalThis.inspect={state,renderHome,renderRenew,renderRequests,renderMy,collectionOpen,applicationCard,requestCard,selectionChanged,addDays,ensureTicket,submitRequest,lookupReceipt,receiptText};');
 function harness() {
   const nodes = new Map();
-  const node = () => ({ innerHTML: '', textContent: '', hidden: false, setAttribute() {}, removeAttribute() {}, querySelectorAll() { return []; }, scrollIntoView() {} });
-  for (const id of ['memberContent','memberNav','memberAccount','memberCenterName','memberContact','memberConnection','memberToast','memberSelectionDetail','memberDesiredDate','memberGuardianFields','memberPeriodPreview']) nodes.set(id, node());
+  const node = () => ({innerHTML:'',textContent:'',hidden:false,setAttribute(){},removeAttribute(){},querySelectorAll(){return []},scrollIntoView(){}});
+  for (const id of ['memberContent','memberNav','memberCenterName','memberContact','memberConnection','memberToast','memberSelectionDetail','memberDesiredDate','memberGuardianFields','memberPeriodPreview']) nodes.set(id,node());
   const handlers = {};
-  const home = {
-    settings: { applications_enabled: true, requests_enabled: true, transfer_available: true, bank_name: 'TEST BANK', bank_account: 'TEST ACCOUNT', bank_holder: 'TEST ONLY', photo_limit: 3 },
-    categories: [], request_categories: [{ id: 'r', name: '필요한 물품' }],
-    products: [{ id: 'p', name: '헬스 30일', facility: 'fitness', duration_days: 30, price: 30000, updated_at: '2026-09-28T01:00:00Z' }],
-    gx_classes: [], posts: [], terms: [{ id: 't', title: '개인정보', kind: 'privacy', required: true, approved: true, active: true, body: 'TEST TERMS', version: 1 }], form: { id: 'f', fields: [] },
-  };
-  const box = {
-    console, Intl, Date, Map, Promise, URLSearchParams, URL, Image: class {}, setTimeout, clearTimeout, crypto: webcrypto,
-    navigator: { onLine: true }, location: { pathname: '/members', hash: '', search: '', origin: 'http://localhost' }, history: { pushState() {}, replaceState() {} },
-    window: { addEventListener(name, callback) { handlers[name] = callback; }, scrollTo() {}, devicePixelRatio: 1 },
-    document: { getElementById: id => nodes.get(id), querySelectorAll: () => [], addEventListener(name, callback) { handlers[name] = callback; } },
-    getClient: async () => null, service: async () => ({}), uploadPhoto: async () => '', photoUrl: async () => '', todayKst: () => '2026-09-28',
-    e: value => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#039;'),
-  };
-  vm.createContext(box); vm.runInContext(source, box);
-  const api = box.inspect;
-  api.state.home = home;
-  api.state.session = { user: { id: 'user-a', email: 'a@example.invalid' } };
-  api.state.mine = { profile: { name: 'TEST MEMBER', active: true, approved: true, resident_verified: true }, passes: [], applications: [], requests: [] };
-  return { api, box, home, nodes, handlers };
+  const urls = [];
+  const home = {settings:{applications_enabled:true,requests_enabled:true,transfer_available:true,photo_limit:3},categories:[],request_categories:[{id:'r',name:'필요한 물품'}],products:[{id:'p',name:'TEST 이용권',facility:'fitness',duration_days:30,price:30000,updated_at:'2026-09-28T01:00:00Z'}],gx_classes:[],posts:[],terms:[{id:'privacy',kind:'privacy',title:'개인정보',body:'TEST PRIVACY',required:true,active:true,approved:true},{id:'rules',kind:'rules',title:'이용규정',body:'TEST RULES',required:true,active:true,approved:true}],form:{id:'form',fields:[]}};
+  const box = {console,Intl,Date,Map,Promise,Set,URLSearchParams,URL,Blob,Image:class{},setTimeout,clearTimeout,
+    navigator:{onLine:true},location:{pathname:'/members',hash:'',search:'',origin:'http://localhost'},
+    history:{pushState(_state,_title,url){urls.push(url);box.location.pathname=url.split('?')[0];}},
+    window:{addEventListener(name,cb){handlers[name]=cb},scrollTo(){},devicePixelRatio:1},
+    document:{getElementById:id=>nodes.get(id),querySelectorAll:()=>[],addEventListener(name,cb){handlers[name]=cb}},
+    service:async()=>home,guestService:async()=>({}),encodeGuestPhoto:async()=>({}),photoUrl:async()=>'',todayKst:()=> '2026-09-28',
+    e:v=>String(v??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#039;')};
+  vm.createContext(box);vm.runInContext(source,box);
+  const api=box.inspect;api.state.home=home;
+  return {api,box,home,nodes,handlers,urls};
 }
+const formData = values => ({get:key=>values[key]??'',getAll:key=>key==='consents'?['privacy','rules']:[],has:key=>!!values[key]});
+const secret = 'a'.repeat(64);
 
-test('member home preserves the requested title and personal actions require authentication', () => {
-  const { api, nodes } = harness();
-  api.renderHome(); assert.match(nodes.get('memberContent').innerHTML, /회원분들께 보고드립니다\./);
-  api.state.session = null;
-  for (const render of [api.renderRenew, api.renderRequests, api.renderMy]) { render(); assert.match(nodes.get('memberContent').innerHTML, /data-form="login"/); }
+test('member public entry has no account or Auth call and keeps the requested board title',()=>{
+  const {api,nodes}=harness();api.renderHome();
+  assert.match(nodes.get('memberContent').innerHTML,/회원분들께 보고드립니다\./);
+  assert.doesNotMatch(original,/signUp|signIn|auth\.|getClient|localStorage|sessionStorage|renderAuth|activate_invite/);
+  assert.doesNotMatch(readFileSync(new URL('../members.html',import.meta.url),'utf8'),/로그인|memberAccount/);
 });
 
-test('applications stay unavailable until configured and verified membership is required for renewal', () => {
-  const { api, nodes, home } = harness();
-  api.renderRenew(); assert.match(nodes.get('memberContent').innerHTML, /data-form="application"/);
-  home.settings.applications_enabled = false;
-  api.renderRenew(); assert.doesNotMatch(nodes.get('memberContent').innerHTML, /data-form="application"/);
-  home.settings.applications_enabled = true; api.state.mine.profile.resident_verified = false;
-  api.renderRenew(); assert.doesNotMatch(nodes.get('memberContent').innerHTML, /data-form="application"/);
+test('disabled collection displays useful guest forms without accepting personal entry',()=>{
+  const {api,home,nodes}=harness();home.settings.applications_enabled=false;home.settings.requests_enabled=false;
+  for(const [render,kind] of [[api.renderRenew,'application'],[api.renderRequests,'request']]){
+    render();const html=nodes.get('memberContent').innerHTML;
+    assert.match(html,new RegExp(`data-form="${kind}"`));
+    assert.match(html,/name="name"/);assert.match(html,/name="phone"/);
+    assert.match(html,/<fieldset class="member-form-fieldset" disabled>/);
+    assert.match(html,/센터 설정 완료 후 접수 가능/);
+    assert.doesNotMatch(html,/계정 만들기|로그인/);
+  }
 });
 
-test('period preview counts the first day and appends to already approved future passes', () => {
-  const { api, nodes } = harness();
-  for (const [days, end] of [[30, '2026-10-30'], [90, '2026-12-29'], [180, '2027-03-29'], [365, '2027-09-30']]) assert.equal(api.addDays('2026-10-01', days - 1), end);
-  const form = { elements: { selection: { value: 'product:p' }, desired_start_date: { value: '2026-10-01' } } };
-  api.selectionChanged(form); assert.match(nodes.get('memberPeriodPreview').innerHTML, /2026\.10\.30/);
-  api.state.mine.passes = [{ facility: 'fitness', status: 'active', end_date: '2026-12-31' }];
-  api.selectionChanged(form); assert.match(nodes.get('memberPeriodPreview').innerHTML, /2027\.01\.01 ~ 2027\.01\.30/);
+test('collection requires approved privacy and operational terms',()=>{
+  const {api,home}=harness();assert.equal(api.collectionOpen('application'),true);assert.equal(api.collectionOpen('request'),true);
+  home.terms[0].approved=false;assert.equal(api.collectionOpen('application'),false);assert.equal(api.collectionOpen('request'),false);
+  home.terms[0].approved=true;home.terms[1].active=false;assert.equal(api.collectionOpen('application'),false);assert.equal(api.collectionOpen('request'),true);
 });
 
-test('GX waitlisted applicants see no transfer account or payment report action', () => {
-  const { api } = harness();
-  const application = { id: 'id', application_no: 'A-TEST', product_snapshot: { name: '<img onerror=evil()>' }, amount: 30000, payment_method: 'transfer', application_status: 'pending', payment_status: 'awaiting', pass_status: 'pending', reservation_status: 'waitlisted', consents_snapshot: [], created_at: '2026-09-28T01:00:00Z' };
-  const waiting = api.applicationCard(application);
-  assert.match(waiting, /&lt;img onerror=evil\(\)&gt;/);
-  assert.doesNotMatch(waiting, /TEST ACCOUNT|data-form="payment-report"/);
-  const allocated = api.applicationCard({ ...application, reservation_status: 'none' });
-  assert.match(allocated, /data-form="payment-report"/);
-  assert.match(allocated, /관리자 확인 후 재등록이 완료됩니다/);
+test('guest preview counts the first day without looking up existing passes',()=>{
+  const {api,nodes}=harness();
+  for(const [days,end] of [[30,'2026-10-30'],[90,'2026-12-29'],[180,'2027-03-29'],[365,'2027-09-30']])assert.equal(api.addDays('2026-10-01',days-1),end);
+  api.state.mine={passes:[{end_date:'2030-01-01',facility:'fitness',status:'active'}]};
+  api.selectionChanged({elements:{selection:{value:'product:p'},desired_start_date:{value:'2026-10-01'}}});
+  const html=nodes.get('memberPeriodPreview').innerHTML;
+  assert.match(html,/2026\.10\.01 ~ 2026\.10\.30/);assert.match(html,/관리자가 직접 확인/);assert.doesNotMatch(html,/2030/);
 });
 
-test('private request rendering escapes text and never includes internal notes', () => {
-  const { api } = harness();
-  const html = api.requestCard({ request_no: 'R-TEST', status: 'received', body: '<script>evil()</script>', reply: 'TEST REPLY', internal_notes: 'SECRET STAFF NOTE', created_at: '2026-09-28T01:00:00Z' });
-  assert.match(html, /&lt;script&gt;/);
-  assert.doesNotMatch(html, /SECRET STAFF NOTE/);
+test('unassigned or waiting GX receipts never display a transfer account or report action',()=>{
+  const {api}=harness();api.state.receipt={status:'submitted',settings:{bank_name:'TEST BANK',bank_account:'SECRET ACCOUNT',bank_holder:'TEST'}};
+  const app={product_snapshot:{name:'<img onerror=evil()>'},amount:30000,payment_method:'transfer',application_status:'received',payment_status:'awaiting',pass_status:'pending',consents_snapshot:[]};
+  for(const status of ['unassigned','waitlisted','expired']){
+    const html=api.applicationCard({...app,reservation_status:status});assert.doesNotMatch(html,/SECRET ACCOUNT|data-form="payment-report"/);assert.match(html,/&lt;img onerror=evil\(\)&gt;/);
+  }
+  assert.match(api.applicationCard({...app,reservation_status:'none'}),/data-form="payment-report"/);
+  assert.doesNotMatch(api.applicationCard({...app,reservation_status:'none',application_status:'needs_review'}),/SECRET ACCOUNT/);
 });
 
-test('offline transition clears private data and replaces the visible personal page', () => {
-  const { api, box, nodes, handlers } = harness();
-  box.location.pathname = '/members/my'; box.navigator.onLine = false;
-  handlers.offline();
-  assert.equal(api.state.mine, null);
-  assert.match(nodes.get('memberContent').innerHTML, /인터넷 연결이 필요합니다/);
-  assert.doesNotMatch(nodes.get('memberContent').innerHTML, /TEST MEMBER/);
+test('request rendering escapes content and excludes internal staff notes',()=>{
+  const {api}=harness();api.state.receipt={photos:[]};
+  const html=api.requestCard({status:'received',title:'TEST',body:'<script>evil()</script>',reply:'PUBLIC REPLY',internal_notes:'PRIVATE STAFF NOTE'});
+  assert.match(html,/&lt;script&gt;/);assert.match(html,/PUBLIC REPLY/);assert.doesNotMatch(html,/PRIVATE STAFF NOTE/);
 });
 
-test('an old account response cannot populate a new account or a page invalidated by logout/offline', async () => {
-  const { api, box } = harness();
-  let resolve;
-  box.service = () => new Promise(done => { resolve = done; });
-  const pending = api.refreshMine();
-  api.state.session = { user: { id: 'user-b' } }; api.state.mine = null;
-  resolve({ profile: { name: 'OLD ACCOUNT' } }); await pending;
-  assert.equal(api.state.mine, null);
-  const invalidated = api.refreshMine();
-  api.state.epoch++;
-  resolve({ profile: { name: 'STALE RESPONSE' } }); await invalidated;
-  assert.equal(api.state.mine, null);
+test('receipt lookup accepts only receipt number and secret, never identity-based lookup',()=>{
+  const {api,nodes}=harness();api.renderMy();const html=nodes.get('memberContent').innerHTML;
+  assert.match(html,/name="receipt_no"/);assert.match(html,/name="receipt_key" type="password"/);
+  assert.doesNotMatch(html,/name="name"|name="phone"|name="building"|name="unit"/);
 });
 
-test('new-account inputs are absent while member collection is disabled; existing login remains', () => {
-  const { api, home, nodes } = harness();
-  home.settings.applications_enabled = false; home.settings.requests_enabled = false;
-  api.state.authMode = 'signup'; api.renderAuth();
-  const unavailable = nodes.get('memberContent').innerHTML;
-  assert.doesNotMatch(unavailable, /data-form="signup"|name="email"|name="password"/);
-  assert.match(unavailable, /개인정보 처리 안내를 관리자가 승인/);
-  api.state.authMode = 'login'; api.renderAuth();
-  assert.match(nodes.get('memberContent').innerHTML, /data-form="login"/);
+test('closed settings block prepare before any guest API transmission',async()=>{
+  const {api,home,box}=harness();home.settings.requests_enabled=false;let calls=0;box.guestService=async()=>{calls++;return {}};
+  await assert.rejects(api.ensureTicket({},formData({phone:'TEST'}),'request'),/현재 접수 준비 중/);assert.equal(calls,0);
 });
 
-test('account creation requires approved active privacy terms and never promises verified email ownership', () => {
-  const { api, home, nodes } = harness();
-  home.terms[0].approved = false; assert.equal(api.signupAvailable(), false);
-  home.terms[0].approved = true; home.terms[0].active = false; assert.equal(api.signupAvailable(), false);
-  home.terms[0].active = true; assert.equal(api.signupAvailable(), true);
-  api.state.authMode = 'signup'; api.renderAuth();
-  const html = nodes.get('memberContent').innerHTML;
-  assert.match(html, /name="signup_consents"/);
-  assert.match(html, /이메일 주소의 소유, 휴대폰 또는 입주민 확인이 완료되지는 않습니다/);
-  assert.doesNotMatch(html, /확인 이메일 받기|확인 링크를 눌러/);
+test('guest submit preserves ticket for retries and exposes key only after confirmed receipt',async()=>{
+  const {api,box,urls,nodes}=harness();const calls=[];
+  const receipt={receipt_no:'R-TEST',kind:'request',status:'submitted',profile_snapshot:{name:'TEST MEMBER'},request:{title:'TEST',body:'TEST BODY',status:'received'},photos:[],settings:{}};
+  box.guestService=async(action,payload)=>{calls.push({action,payload});if(action==='prepare')return {ticket_id:'ticket',receipt_no:'R-TEST',receipt_key:secret};if(action==='submit_request')return {receipt};return {}};
+  const form={isConnected:true,elements:{photos:{files:[]}}};const data=formData({phone:'TEST PHONE',name:'TEST MEMBER',building:'101',unit:'1001',category_id:'r',title:'TEST',body:'TEST BODY'});
+  const ticket=await api.ensureTicket(form,data,'request');assert.equal(api.state.receiptKey,'');assert.equal(ticket.receipt_key,secret);
+  await api.submitRequest(form,data);
+  assert.equal(calls.filter(v=>v.action==='prepare').length,1);assert.equal(api.state.receiptKey,secret);
+  assert.match(nodes.get('memberContent').innerHTML,/접수가 완료되었습니다/);
+  assert.equal(urls.at(-1),'/members/my');assert(!urls.some(v=>v.includes(secret)));
+  assert.doesNotMatch(api.receiptText(),/TEST PHONE|TEST MEMBER|\?receipt/);
 });
 
-test('signup refreshes policy and prevents Auth transmission after collection closes or privacy terms change', async () => {
-  const { api, box, home } = harness();
-  let signups = 0;
-  api.state.client = { auth: { async signUp() { signups++; return { data: { session: null } }; } } };
-  const data = { get: key => ({ email: 'test@example.invalid', password: 'TEST ONLY PASSWORD', password_confirm: 'TEST ONLY PASSWORD' })[key], getAll: () => ['t'] };
-  const form = { reset() {}, innerHTML: '' };
-  box.service = async () => ({ ...home, settings: { ...home.settings, applications_enabled: false, requests_enabled: false } });
-  await assert.rejects(api.createMemberAccount(form, data), /현재 신규 계정을 만들 수 없습니다/);
-  assert.equal(signups, 0);
-  box.service = async () => ({ ...home, terms: [{ ...home.terms[0], id: 'new-privacy-version' }] });
-  await assert.rejects(api.createMemberAccount(form, data), /개인정보 처리 안내가 변경/);
-  assert.equal(signups, 0);
+test('failed submission never produces success state or reveals the prepared key',async()=>{
+  const {api,box}=harness();
+  box.guestService=async action=>{if(action==='prepare')return {ticket_id:'ticket',receipt_no:'R-TEST',receipt_key:secret};throw new Error('DB unavailable')};
+  await assert.rejects(api.submitRequest({isConnected:true,elements:{photos:{files:[]}}},formData({phone:'TEST',title:'TEST',body:'TEST'})),/DB unavailable/);
+  assert.equal(api.state.receipt,null);assert.equal(api.state.receiptKey,'');
 });
 
-test('a no-session signup response uses conditional email instructions, not a false delivery claim', async () => {
-  const { api, box, home } = harness();
-  box.service = async () => home;
-  api.state.client = { auth: { async signUp() { return { data: { session: null }, error: null }; } } };
-  const data = { get: key => ({ email: 'test@example.invalid', password: 'TEST ONLY PASSWORD', password_confirm: 'TEST ONLY PASSWORD' })[key], getAll: () => ['t'] };
-  const form = { reset() {}, innerHTML: '' };
-  await api.createMemberAccount(form, data);
-  assert.match(form.innerHTML, /이메일 확인 안내가 도착한 경우/);
-  assert.doesNotMatch(form.innerHTML, /발송했습니다|발송 완료|이메일 인증 완료/);
+test('late receipt lookup cannot restore data after the view is invalidated',async()=>{
+  const {api,box}=harness();let resolve;box.guestService=()=>new Promise(done=>{resolve=done});
+  const pending=api.lookupReceipt('R-TEST',secret);api.state.epoch++;
+  resolve({receipt:{receipt_no:'R-TEST',profile_snapshot:{name:'OLD PRIVATE DATA'}}});await pending;
+  assert.equal(api.state.receipt,null);assert.equal(api.state.receiptKey,'');
+});
+
+test('offline lookup view removes private receipt content',()=>{
+  const {api,box,nodes,handlers}=harness();box.location.pathname='/members/my';box.navigator.onLine=false;
+  api.state.receipt={profile_snapshot:{name:'PRIVATE MEMBER'}};api.state.receiptKey=secret;handlers.offline();
+  assert.equal(api.state.receipt,null);assert.doesNotMatch(nodes.get('memberContent').innerHTML,/PRIVATE MEMBER/);assert.match(nodes.get('memberContent').innerHTML,/인터넷 연결이 필요합니다/);
 });
