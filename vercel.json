@@ -2,9 +2,7 @@
   "installCommand": "npm ci --omit=dev --ignore-scripts",
   "cleanUrls": true,
   "rewrites": [
-    { "source": "/admin", "destination": "/admin.html" },
-    { "source": "/members", "destination": "/members.html" },
-    { "source": "/members/:path*", "destination": "/members.html" }
+    { "source": "/members/:path*", "destination": "/members" }
   ],
   "headers": [
     {
