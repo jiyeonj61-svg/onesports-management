@@ -273,7 +273,7 @@ export function registerServiceWorker() {
   if (!('serviceWorker' in navigator) || !location.protocol.startsWith('http')) return;
   window.addEventListener('load', async () => {
     try {
-      const registration = await navigator.serviceWorker.register('/sw.js?v=20260828-6', { updateViaCache: 'none' });
+      const registration = await navigator.serviceWorker.register('/sw.js?v=20260928-1', { updateViaCache: 'none' });
       await registration.update();
     } catch (error) {
       console.warn('서비스워커 등록 실패:', error);

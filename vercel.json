@@ -1,9 +1,24 @@
 {
+  "installCommand": "npm ci --omit=dev --ignore-scripts",
   "cleanUrls": true,
   "rewrites": [
-    { "source": "/admin", "destination": "/admin.html" }
+    { "source": "/admin", "destination": "/admin.html" },
+    { "source": "/members", "destination": "/members.html" },
+    { "source": "/members/:path*", "destination": "/members.html" }
   ],
   "headers": [
+    {
+      "source": "/members/:path*",
+      "headers": [{ "key": "Cache-Control", "value": "no-store, private, max-age=0" }]
+    },
+    {
+      "source": "/members",
+      "headers": [{ "key": "Cache-Control", "value": "no-store, private, max-age=0" }]
+    },
+    {
+      "source": "/admin",
+      "headers": [{ "key": "Cache-Control", "value": "no-store, private, max-age=0" }]
+    },
     {
       "source": "/api/config",
       "headers": [

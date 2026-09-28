@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f766e" />
+  <meta name="description" content="원스포츠 회원 안내, 이용권 재등록 및 건의·요청" />
+  <meta name="referrer" content="strict-origin-when-cross-origin" />
+  <title>원스포츠 회원서비스</title>
+  <link rel="icon" href="/icons/favicon.png" type="image/png" />
+  <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+  <link rel="stylesheet" href="/assets/styles.css?v=20260928-members-1" />
+  <link rel="stylesheet" href="/assets/member-service.css?v=20260928-members-1" />
+  <script src="/config.js?v=20260928-members-1"></script>
+</head>
+<body class="member-page">
+  <a class="member-skip" href="#memberContent">본문으로 바로가기</a>
+  <div id="memberConnection" class="member-connection" role="status" hidden></div>
+  <header class="member-header">
+    <div class="member-container member-header-inner">
+      <a class="brand" href="/members" data-member-route aria-label="원스포츠 회원 홈">
+        <img class="brand-logo" src="/assets/onesports-logo.png" alt="원스포츠" width="386" height="122" />
+        <span class="member-brand-label">회원서비스</span>
+      </a>
+      <button id="memberAccount" class="member-text-button" type="button">로그인</button>
+    </div>
+  </header>
+  <main id="memberContent" class="member-container member-main" tabindex="-1" aria-busy="true">
+    <div class="member-empty" role="status">센터 소식을 불러오고 있습니다.</div>
+  </main>
+  <footer class="member-container member-footer">
+    <strong id="memberCenterName">힐스테이트 상도 센트럴파크 1단지</strong>
+    <span id="memberContact"></span>
+    <p>QR은 회원 페이지로 연결합니다. 이용권 조회와 신청에는 본인 계정 확인이 필요합니다.</p>
+  </footer>
+  <nav id="memberNav" class="member-bottom-nav" aria-label="회원 메뉴"></nav>
+  <div id="memberToast" class="member-toast" role="status" aria-live="polite" hidden></div>
+  <noscript><p class="member-container">회원서비스를 이용하려면 브라우저의 JavaScript를 켜 주세요.</p></noscript>
+  <script type="module" src="/assets/members.js?v=20260928-members-1"></script>
+</body>
+</html>

@@ -1,4 +1,5 @@
 import { data } from './data.js';
+import { initMemberAdmin, clearMemberAdmin } from './member-admin.js';
 import {
   APP_START_DATE,
   PERIOD_META,
@@ -74,6 +75,7 @@ function renderMode(connection) {
 }
 
 function showLogin(message = '') {
+  clearMemberAdmin();
   $('#loginScreen').classList.remove('hidden');
   $('#adminApp').classList.add('hidden');
   $('#loginMessage').textContent = message;
@@ -833,6 +835,7 @@ function bindEvents() {
 
 let appStarted = false;
 async function startAdminApp() {
+  if (!state.connection.isDemo) initMemberAdmin();
   if (!state.areas.length) {
     state.areas = await data.getAreas();
     const options = '<option value="">공통·기타</option>' + state.areas.map((area) => `<option value="${area.id}">${escapeHtml(area.name)}</option>`).join('');

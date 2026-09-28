@@ -2,6 +2,15 @@
 
 힐스테이트 상도 센트럴파크 1단지 휘트니스센터의 관리업무를 기록하고, 입주자대표회의·관리사무소에 열람 전용으로 공유하는 모바일 대응 웹앱입니다.
 
+## 2026-09-28 회원서비스 추가
+
+- `/members`: 회원 안내 게시판, 빠른 연장·재등록, 비공개 건의, 본인 처리내역
+- 기존 `/admin`에 회원·이용권, 신청·결제, GX, 게시판, 건의, 회원서비스 설정 추가
+- 기존 운영 DB에는 **`supabase/member-service.sql`만** 적용합니다. 아래 과거 설치/업데이트 절차를 다시 실행하지 마세요.
+- [DB 적용·복구 안내](docs/member-service-operations.md), [API 계약](docs/member-service-contract.md)
+- 최초 신청·건의 접수는 꺼져 있습니다. 요금·GX 정원과 일정·개인정보 보유기간·승인된 동의문을 운영자가 확인한 후 엽니다.
+- 검증: `npm ci`, `npm test`, `npm run test:db`, `node tests/backend-security.mjs`. DB 테스트 두 명령은 분리된 로컬 PostgreSQL을 사용하므로 순서대로 실행합니다.
+
 ## 이번 적용 버전
 
 - 제공받은 **원스포츠 공식 로고**를 공개 화면·관리자 화면·모바일 앱 아이콘에 적용
@@ -88,14 +97,14 @@ do update set display_name = excluded.display_name, active = true;
 
 ## 데모 확인
 
-Supabase 설정 전에는 자동으로 데모 모드가 실행됩니다. 현재 날짜가 2026년 9월 1일 이전이어도 데모 기준일은 2026년 9월 1일로 표시됩니다.
+운영 사이트는 Supabase 연결 실패 시 오류를 표시합니다. 자동 데모 전환은 하지 않습니다. 데모는 localhost 또는 127.0.0.1에서 `?demo=1`을 명시한 기존 관리현황 화면에만 허용합니다. 회원서비스는 데모 저장을 지원하지 않습니다.
 
 ```bash
 python -m http.server 8000
 ```
 
-- 공개 화면: `http://localhost:8000`
-- 관리자 화면: `http://localhost:8000/admin.html`
+- 공개 화면: `http://localhost:8000/?demo=1`
+- 관리자 화면: `http://localhost:8000/admin.html?demo=1`
 - 관리자 화면에서 `데모 관리자 화면 보기` 선택
 
 데모 입력은 현재 브라우저의 LocalStorage에만 저장됩니다.

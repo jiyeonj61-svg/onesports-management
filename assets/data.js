@@ -243,6 +243,7 @@ async function initSupabase(config) {
   if (typeof createClient !== 'function') throw new Error('Supabase createClient 함수를 찾지 못했습니다.');
   supabase = createClient(config.supabaseUrl.trim(), config.supabasePublishableKey.trim(), {
     auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+    global: { fetch: (input, options = {}) => fetch(input, { ...options, cache: 'no-store' }) },
   });
 }
 
@@ -255,10 +256,16 @@ async function init() {
       mode = 'supabase';
     } catch (error) {
       configError = `Supabase 클라이언트 연결 실패: ${error?.message || '알 수 없는 오류'}`;
-      mode = 'demo-error';
-      loadDemoStore();
+      mode = 'error';
+      throw new Error(configError + ' 실제 저장이 중단되었습니다. 연결을 확인해 주세요.');
     }
   } else {
+    const localDemo = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname)
+      && new URLSearchParams(location.search).get('demo') === '1';
+    if (!localDemo) {
+      mode = 'error';
+      throw new Error('운영 DB 연결 설정을 불러오지 못했습니다. 저장되지 않았습니다. 관리자에게 문의해 주세요.');
+    }
     mode = 'demo';
     loadDemoStore();
   }
@@ -688,6 +695,11 @@ function subscribe(callback) {
 }
 
 export const data = {
+  async getClient() {
+    await init();
+    if (mode !== 'supabase' || !supabase) throw new Error('실제 DB 연결이 필요합니다.');
+    return supabase;
+  },
   init,
   state,
   getAreas,
