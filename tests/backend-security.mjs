@@ -194,9 +194,25 @@ try {
     await assert.rejects(save('settings',{photo_limit:null}));
     await assert.rejects(save('settings',{applications_enabled:'yes'}));
     await save('settings',{applications_enabled:false,requests_enabled:false});
+    await assert.rejects(upload(A,`requests/${A}/${randomUUID()}.jpg`));
+    await upload(ADMIN,`requests/${ADMIN}/${randomUUID()}.jpg`); // Existing backlog remains manageable while collection is closed.
     await assert.rejects(application(A));
     await assert.rejects(rpc(A,'request_submit',{idempotency_key:randomUUID(),category_id:requestCategory,title:'닫힌 접수',body:'거부됨',photos:[]}));
     assert.ok((await rpc(A,'my')).applications.length>0); // Own history survives feature shutdown.
+  });
+
+  await test('request photo upload requires an active approved privacy term as well as an open verified-member channel',async()=>{
+    await save('settings',{requests_enabled:true});
+    await upload(A,`requests/${A}/${randomUUID()}.jpg`);
+    const currentPrivacy=await save('terms',{id:privacy.id,active:true,approved:true});
+    // Model an operator migration retiring all privacy versions while the collection flag is still on.
+    await sql.query("update ms_terms set active=false where kind='privacy'");
+    await assert.rejects(upload(A,`requests/${A}/${randomUUID()}.jpg`));
+    await sql.query('update ms_terms set active=true,approved=false where id=$1',[currentPrivacy.id]).then(()=>assert.fail('unapproved active term must be rejected'),error=>assert.match(error.message,/check constraint/));
+    await upload(ADMIN,`requests/${ADMIN}/${randomUUID()}.jpg`);
+    await sql.query('update ms_terms set active=true,approved=true where id=$1',[currentPrivacy.id]);
+    await upload(A,`requests/${A}/${randomUUID()}.jpg`);
+    await save('settings',{requests_enabled:false});
   });
 } catch(error) {
   results.push({name:'test setup',passed:false,error:error.stack});console.error(error);

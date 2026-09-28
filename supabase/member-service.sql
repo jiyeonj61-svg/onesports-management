@@ -262,6 +262,8 @@ set search_path=pg_catalog,public as $$
   and exists(select 1 from auth.users where id=auth.uid() and email_confirmed_at is not null)
   and (case split_part(path,'/',1)
    when 'requests' then exists(select 1 from public.ms_profiles where user_id=auth.uid() and active and approved and resident_verified)
+    and exists(select 1 from public.ms_settings where id=true and (data->>'requests_enabled')::boolean)
+    and exists(select 1 from public.ms_terms where active and approved and kind='privacy')
    when 'applications' then exists(select 1 from public.ms_settings where id=true and (data->>'applications_enabled')::boolean)
    else false end)
   and (select count(*) from storage.objects where bucket_id='member-service-files' and split_part(name,'/',2)=auth.uid()::text and created_at>now()-interval '1 hour')<100
