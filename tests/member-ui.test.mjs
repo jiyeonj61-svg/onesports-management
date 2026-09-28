@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 
 const source = readFileSync(new URL('../assets/members.js', import.meta.url), 'utf8')
   .replace(/^import[^\n]+\n/, '')
-  .replace(/boot\(\);\s*$/, 'globalThis.inspect={state,renderHome,renderRenew,renderAuth,renderRequests,renderMy,applicationCard,requestCard,selectionChanged,addDays,refreshMine};');
+  .replace(/boot\(\);\s*$/, 'globalThis.inspect={state,renderHome,renderRenew,renderAuth,renderRequests,renderMy,applicationCard,requestCard,selectionChanged,addDays,refreshMine,signupAvailable,createMemberAccount};');
 
 function harness() {
   const nodes = new Map();
@@ -18,7 +18,7 @@ function harness() {
     settings: { applications_enabled: true, requests_enabled: true, transfer_available: true, bank_name: 'TEST BANK', bank_account: 'TEST ACCOUNT', bank_holder: 'TEST ONLY', photo_limit: 3 },
     categories: [], request_categories: [{ id: 'r', name: '필요한 물품' }],
     products: [{ id: 'p', name: '헬스 30일', facility: 'fitness', duration_days: 30, price: 30000, updated_at: '2026-09-28T01:00:00Z' }],
-    gx_classes: [], posts: [], terms: [{ id: 't', title: '개인정보', kind: 'privacy', required: true, body: 'TEST TERMS', version: 1 }], form: { id: 'f', fields: [] },
+    gx_classes: [], posts: [], terms: [{ id: 't', title: '개인정보', kind: 'privacy', required: true, approved: true, active: true, body: 'TEST TERMS', version: 1 }], form: { id: 'f', fields: [] },
   };
   const box = {
     console, Intl, Date, Map, Promise, URLSearchParams, URL, Image: class {}, setTimeout, clearTimeout, crypto: webcrypto,
@@ -100,4 +100,52 @@ test('an old account response cannot populate a new account or a page invalidate
   api.state.epoch++;
   resolve({ profile: { name: 'STALE RESPONSE' } }); await invalidated;
   assert.equal(api.state.mine, null);
+});
+
+test('new-account inputs are absent while member collection is disabled; existing login remains', () => {
+  const { api, home, nodes } = harness();
+  home.settings.applications_enabled = false; home.settings.requests_enabled = false;
+  api.state.authMode = 'signup'; api.renderAuth();
+  const unavailable = nodes.get('memberContent').innerHTML;
+  assert.doesNotMatch(unavailable, /data-form="signup"|name="email"|name="password"/);
+  assert.match(unavailable, /개인정보 처리 안내를 관리자가 승인/);
+  api.state.authMode = 'login'; api.renderAuth();
+  assert.match(nodes.get('memberContent').innerHTML, /data-form="login"/);
+});
+
+test('account creation requires approved active privacy terms and never promises verified email ownership', () => {
+  const { api, home, nodes } = harness();
+  home.terms[0].approved = false; assert.equal(api.signupAvailable(), false);
+  home.terms[0].approved = true; home.terms[0].active = false; assert.equal(api.signupAvailable(), false);
+  home.terms[0].active = true; assert.equal(api.signupAvailable(), true);
+  api.state.authMode = 'signup'; api.renderAuth();
+  const html = nodes.get('memberContent').innerHTML;
+  assert.match(html, /name="signup_consents"/);
+  assert.match(html, /이메일 주소의 소유, 휴대폰 또는 입주민 확인이 완료되지는 않습니다/);
+  assert.doesNotMatch(html, /확인 이메일 받기|확인 링크를 눌러/);
+});
+
+test('signup refreshes policy and prevents Auth transmission after collection closes or privacy terms change', async () => {
+  const { api, box, home } = harness();
+  let signups = 0;
+  api.state.client = { auth: { async signUp() { signups++; return { data: { session: null } }; } } };
+  const data = { get: key => ({ email: 'test@example.invalid', password: 'TEST ONLY PASSWORD', password_confirm: 'TEST ONLY PASSWORD' })[key], getAll: () => ['t'] };
+  const form = { reset() {}, innerHTML: '' };
+  box.service = async () => ({ ...home, settings: { ...home.settings, applications_enabled: false, requests_enabled: false } });
+  await assert.rejects(api.createMemberAccount(form, data), /현재 신규 계정을 만들 수 없습니다/);
+  assert.equal(signups, 0);
+  box.service = async () => ({ ...home, terms: [{ ...home.terms[0], id: 'new-privacy-version' }] });
+  await assert.rejects(api.createMemberAccount(form, data), /개인정보 처리 안내가 변경/);
+  assert.equal(signups, 0);
+});
+
+test('a no-session signup response uses conditional email instructions, not a false delivery claim', async () => {
+  const { api, box, home } = harness();
+  box.service = async () => home;
+  api.state.client = { auth: { async signUp() { return { data: { session: null }, error: null }; } } };
+  const data = { get: key => ({ email: 'test@example.invalid', password: 'TEST ONLY PASSWORD', password_confirm: 'TEST ONLY PASSWORD' })[key], getAll: () => ['t'] };
+  const form = { reset() {}, innerHTML: '' };
+  await api.createMemberAccount(form, data);
+  assert.match(form.innerHTML, /이메일 확인 안내가 도착한 경우/);
+  assert.doesNotMatch(form.innerHTML, /발송했습니다|발송 완료|이메일 인증 완료/);
 });

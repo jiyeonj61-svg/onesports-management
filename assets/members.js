@@ -92,10 +92,24 @@ function renderHome() {
   const menus = [['renew', '빠른 연장', '/members/renew', s.menu_renew], ['requests', '건의·요청하기', '/members/requests', s.menu_requests], ['my', '내 신청내역', '/members/my', s.menu_my], ['board', '공지·조치사항', '/members#memberBoard', s.menu_board]];
   content.innerHTML = `<section class="member-hero"><p class="member-eyebrow">${text(s.center_name || 'ONE SPORTS FITNESS')}</p><h1>${text(s.main_title || '회원분들께 보고드립니다.')}</h1><p>${text(s.subtitle || '회원님의 의견과 센터의 운영 소식을 전합니다.')}</p></section><nav class="member-menu-grid" aria-label="바로가기">${menus.filter(v => v[3] !== false).map(([id, label, href]) => `<a class="member-menu" href="${href}" data-member-route>${icon(id)}<span>${label} <span aria-hidden="true">›</span></span></a>`).join('')}</nav>${s.intro ? notice(s.intro) : ''}${s.menu_board === false ? '' : `<section id="memberBoard">${posts.filter(v => v.pinned).length ? `<section class="member-section"><h2>상단 고정 공지</h2>${posts.filter(v => v.pinned).map(postCard).join('')}</section>` : ''}${rows(state.home.categories).map(cat => `<section class="member-section"><div class="member-section-heading"><h2>${text(cat.name === '조치사항' ? '최근 조치사항' : cat.name)}</h2></div>${posts.filter(v => v.category_id === cat.id && !v.pinned).map(postCard).join('') || empty('등록된 소식이 없습니다.')}</section>`).join('') || empty('게시된 소식이 없습니다. 새로운 센터 소식을 이곳에서 확인해 주세요.')}</section>`}`;
 }
+function signupPrivacyTerms() {
+  return rows(state.home?.terms).filter(term => term.kind === 'privacy' && term.approved === true && term.active === true);
+}
+function signupAvailable() {
+  const s = state.home?.settings || {};
+  return (s.applications_enabled === true || s.requests_enabled === true) && signupPrivacyTerms().length > 0;
+}
 function renderAuth() {
   const signup = state.authMode === 'signup';
   const recovery = state.recovery;
-  content.innerHTML = `${pageHeading(recovery ? '새 비밀번호 설정' : '회원 계정으로 로그인', '본인에게 연결된 이용권과 신청내역만 확인할 수 있습니다.')}<section class="member-card">${!recovery ? `<div class="member-tabs"><button type="button" data-auth-mode="login" class="${signup ? '' : 'active'}">로그인</button><button type="button" data-auth-mode="signup" class="${signup ? 'active' : ''}">계정 만들기</button></div>` : ''}<form class="member-form" data-form="${recovery ? 'password-update' : signup ? 'signup' : 'login'}">${!recovery ? field('이메일', 'email', '', 'type="email" autocomplete="email" required maxlength="254"') : ''}${field(recovery ? '새 비밀번호' : '비밀번호', 'password', '', `type="password" autocomplete="${signup || recovery ? 'new-password' : 'current-password'}" required minlength="${signup || recovery ? 10 : 1}" maxlength="128"`)}${signup || recovery ? field('비밀번호 확인', 'password_confirm', '', 'type="password" autocomplete="new-password" required minlength="10" maxlength="128"') : ''}${signup ? notice('계정 생성 후 이메일의 확인 링크를 눌러 주세요. 기존 회원은 안내데스크에서 받은 1회용 초대코드로 연결하고, 신규 회원은 입주민 확인을 거쳐 이용권이 등록됩니다.') : ''}${errorSlot}<button class="member-button member-full" data-requires-network type="submit">${recovery ? '비밀번호 변경' : signup ? '확인 이메일 받기' : '로그인'}</button>${!signup && !recovery ? '<button class="member-text-button" type="button" data-reset-password>비밀번호를 잊으셨나요?</button>' : ''}</form></section>${notice('이메일 로그인은 계정 확인 절차입니다. 입주민·회원 확인은 관리자가 별도로 진행합니다.')}`;
+  const heading = pageHeading(recovery ? '새 비밀번호 설정' : signup ? '회원서비스 계정 만들기' : '회원 계정으로 로그인', '본인에게 연결된 이용권과 신청내역만 확인할 수 있습니다.');
+  const tabs = !recovery ? `<div class="member-tabs"><button type="button" data-auth-mode="login" class="${signup ? '' : 'active'}">로그인</button><button type="button" data-auth-mode="signup" class="${signup ? 'active' : ''}">계정 만들기</button></div>` : '';
+  if (signup && !recovery && !signupAvailable()) {
+    content.innerHTML = `${heading}<section class="member-card">${tabs}${notice('신규 계정 생성은 개인정보 처리 안내를 관리자가 승인하고 회원 접수를 시작한 뒤 이용할 수 있습니다. 지금은 신규 이메일·비밀번호를 입력받지 않습니다.', 'warning')}<button class="member-secondary member-full" type="button" data-auth-mode="login">기존 계정으로 로그인</button></section>`;
+    return;
+  }
+  const privacy = signup ? signupPrivacyTerms().map(term => `<div class="member-term"><label class="member-check"><input type="checkbox" name="signup_consents" value="${text(term.id)}" required /><span>${text(term.title)} 확인·동의 (필수)</span></label><details><summary>개인정보 처리 안내 · 버전 ${text(term.version)}</summary><div class="member-pre">${text(term.body)}</div></details></div>`).join('') : '';
+  content.innerHTML = `${heading}<section class="member-card">${tabs}<form class="member-form" data-form="${recovery ? 'password-update' : signup ? 'signup' : 'login'}">${!recovery ? field('이메일', 'email', '', 'type="email" autocomplete="email" required maxlength="254"') : ''}${field(recovery ? '새 비밀번호' : '비밀번호', 'password', '', `type="password" autocomplete="${signup || recovery ? 'new-password' : 'current-password'}" required minlength="${signup || recovery ? 10 : 1}" maxlength="128"`)}${signup || recovery ? field('비밀번호 확인', 'password_confirm', '', 'type="password" autocomplete="new-password" required minlength="10" maxlength="128"') : ''}${signup ? notice('이메일 주소와 비밀번호로 계정을 만듭니다. 기존 회원은 현장 확인 후 받은 1회용 초대코드로 회원정보를 연결하고, 신규 회원은 관리자의 입주민 확인을 거쳐 이용권이 등록됩니다.') : ''}${privacy}${errorSlot}<button class="member-button member-full" data-requires-network type="submit">${recovery ? '비밀번호 변경' : signup ? '계정 만들기' : '로그인'}</button>${!signup && !recovery ? '<button class="member-text-button" type="button" data-reset-password>비밀번호를 잊으셨나요?</button>' : ''}</form></section>${notice('계정 생성·로그인만으로 이메일 주소의 소유, 휴대폰 또는 입주민 확인이 완료되지는 않습니다. 회원 확인은 관리자가 현장에서 별도로 진행합니다.')}`;
 }
 function renderAccount() {
   if (!state.session) { renderAuth(); return; }
@@ -301,6 +315,18 @@ async function submitRequest(form, data) {
   if (state.session?.user.id !== owner || state.epoch !== epoch || !navigator.onLine) return;
   content.innerHTML = `${pageHeading('요청이 접수되었습니다.')}<section class="member-card"><div class="member-success-mark" aria-hidden="true">✓</div><h2>센터에서 확인하겠습니다.</h2><dl class="member-definition"><dt>접수번호</dt><dd>${text(result.request.request_no)}</dd><dt>접수일시</dt><dd>${when(result.request.created_at)}</dd><dt>현재 상태</dt><dd>접수 완료</dd></dl><a href="/members/my" data-member-route class="member-button member-full">내 요청 확인</a></section>`;
 }
+async function createMemberAccount(form, data) {
+  // Recheck the member collection policy before sending any email/password to shared Auth.
+  state.home = await service('public_home', {});
+  if (!signupAvailable()) throw new Error('현재 신규 계정을 만들 수 없습니다. 개인정보 처리 안내 승인과 회원 접수 시작이 필요합니다.');
+  const agreed = data.getAll('signup_consents');
+  if (signupPrivacyTerms().some(term => !agreed.includes(term.id))) throw new Error('개인정보 처리 안내가 변경되었거나 동의가 필요합니다. 새로고침 후 안내를 확인해 주세요.');
+  if (data.get('password') !== data.get('password_confirm')) throw new Error('비밀번호 확인이 일치하지 않습니다.');
+  const { data: auth, error } = await state.client.auth.signUp({ email: data.get('email').trim(), password: data.get('password'), options: { emailRedirectTo: `${location.origin}/members` } });
+  if (error) throw error;
+  if (auth.session) { state.session = auth.session; state.account = true; await refreshMine(); render(); }
+  else { form.reset(); form.innerHTML = `${notice('계정 생성 요청을 처리했습니다. 이메일 확인 안내가 도착한 경우 해당 절차를 완료한 뒤 로그인해 주세요. 이미 가입한 이메일이라면 기존 계정으로 로그인해 주세요.')}<button class="member-button" type="button" data-auth-mode="login">로그인 화면으로</button>`; }
+}
 async function onSubmit(event) {
   const form = event.target.closest('form[data-form]');
   if (!form) return;
@@ -322,11 +348,7 @@ async function onSubmit(event) {
         await refreshMine(); render(); break;
       }
       case 'signup': {
-        if (data.get('password') !== data.get('password_confirm')) throw new Error('비밀번호 확인이 일치하지 않습니다.');
-        const { data: auth, error } = await state.client.auth.signUp({ email: data.get('email').trim(), password: data.get('password'), options: { emailRedirectTo: `${location.origin}/members` } });
-        if (error) throw error;
-        if (auth.session) { state.session = auth.session; state.account = true; await refreshMine(); render(); }
-        else { form.reset(); form.innerHTML = `${notice('이메일 확인 링크를 발송했습니다. 받은편지함에서 확인한 뒤 로그인해 주세요. 이미 가입한 이메일이라면 기존 계정으로 로그인해 주세요.')}<button class="member-button" type="button" data-auth-mode="login">로그인 화면으로</button>`; }
+        await createMemberAccount(form, data);
         break;
       }
       case 'password-update': {
