@@ -111,7 +111,8 @@ try{
   const child=await prepare(ids,'gx'),childInput={...input,...key(child),profile:child.profile,expected_catalog_updated_at:gx.updated_at,student_name:'격리 어린이',guardian_consent:true};
   await assert.rejects(guest('submit_application',childInput),/필수/);assert.equal((await guest('submit_application',{...childInput,consents:[...ids,guardian.id]})).receipt.application.guardian_consent,true);
  });
- await test('fresh-install source RPC definitions exactly match the targeted upgrade',async()=>{
+ await test('fresh-install source RPC definitions match the ordered targeted upgrades',async()=>{
+  await sql.query(await fs.readFile('supabase/renewal-only.sql','utf8'));
   const definitions=(await sql.query("select proname,pg_get_functiondef(oid) definition from pg_proc where oid in ('public.member_service(text,jsonb)'::regprocedure,'public.guest_service(text,jsonb)'::regprocedure) order by proname")).rows;
   await sql.query(await fs.readFile('supabase/member-service.sql','utf8'));await sql.query(await fs.readFile('supabase/guest-service.sql','utf8'));
   const fresh=(await sql.query("select proname,pg_get_functiondef(oid) definition from pg_proc where oid in ('public.member_service(text,jsonb)'::regprocedure,'public.guest_service(text,jsonb)'::regprocedure) order by proname")).rows;assert.deepEqual(fresh,definitions);assert.deepEqual(await permissions(),aclBefore);

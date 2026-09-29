@@ -184,12 +184,12 @@ test('reference prices stay readable and draft agreements appear inside disabled
   const updated=api.applicationDocument('fitness_golf')+api.applicationConsents('fitness_golf');assert.match(updated,/123,456원/);assert.match(updated,/LATEST RULE BODY/);assert.doesNotMatch(updated,/신청서 기준 요금표|515,000원|양도규정|보유기간을 확정|data-draft-consent/);
 });
 
-test('signature modes govern both rendering and submission before prepare',async()=>{
+test('renewal signature requires always mode and ignores new-only mode',async()=>{
   const {api,home,nodes,box}=harness();
-  for(const [mode,kind,required] of [['none','new',false],['new','new',true],['new','renewal',false],['always','new',true],['always','renewal',true]])assert.equal(api.signatureRequired({signature_mode:mode},kind),required);
+  for(const [mode,required] of [['none',false],['new',false],['always',true]])assert.equal(api.signatureRequired({signature_mode:mode}),required);
   home.form.signature_mode='none';api.renderApplication('fitness_golf');assert.doesNotMatch(nodes.get('memberContent').innerHTML,/id="memberSignatureSection"/);
-  home.form.signature_mode='new';api.renderApplication('fitness_golf');assert.match(nodes.get('memberContent').innerHTML,/id="memberSignatureSection" hidden/);
-  home.form.signature_mode='always';api.renderApplication('fitness_golf');assert.match(nodes.get('memberContent').innerHTML,/id="memberSignatureSection" >/);
+  home.form.signature_mode='new';api.renderApplication('fitness_golf');assert.doesNotMatch(nodes.get('memberContent').innerHTML,/id="memberSignatureSection"/);
+  home.form.signature_mode='always';api.renderApplication('fitness_golf');assert.match(nodes.get('memberContent').innerHTML,/id="memberSignatureSection">/);
   let calls=0;box.guestService=async()=>{calls++;return {}};
   const form={dataset:{program:'fitness_golf'},elements:{selection:{value:'product:p'}}};
   await assert.rejects(api.submitApplication(form,formData({kind:'renewal',payment_method:'card'})),/신청자 서명/);assert.equal(calls,0);
@@ -212,8 +212,8 @@ test('application submit sends matching form snapshot, program and card payment'
   const form={isConnected:true,dataset:{program:'fitness_golf'},elements:{selection:{value:'product:p'}}};
   await api.submitApplication(form,formData({kind:'renewal',phone:'TEST',payment_method:'card',consents:['privacy','rules','fitness-rules'],extra_purpose:'TEST PURPOSE',desired_start_date:'2026-10-01'}));
   const sent=calls.find(call=>call.action==='submit_application').payload;
-  assert.equal(sent.program,'fitness_golf');assert.equal(sent.expected_form_id,'fitness-form');assert.equal(sent.form_values.purpose,'TEST PURPOSE');assert.equal(sent.payment_method,'card');assert.equal(sent.product_id,'p');assert.equal(sent.gx_class_id,undefined);
-  await assert.rejects(api.submitApplication({dataset:{program:'gx'},elements:{selection:{value:'product:p'}}},formData({kind:'new'})),/이용권 또는 GX 반을 선택/);
+  assert.equal(sent.kind,'renewal');assert.equal(sent.program,'fitness_golf');assert.equal(sent.expected_form_id,'fitness-form');assert.equal(sent.form_values.purpose,'TEST PURPOSE');assert.equal(sent.payment_method,'card');assert.equal(sent.product_id,'p');assert.equal(sent.gx_class_id,undefined);
+  await assert.rejects(api.submitApplication({dataset:{program:'gx'},elements:{selection:{value:'product:p'}}},formData({kind:'renewal'})),/이용권 또는 GX 반을 선택/);
 });
 
 test('cash receipt does not offer transfer reporting or use a card-only instruction',()=>{
@@ -254,5 +254,26 @@ test('missing consent or a forged cash selection is rejected before transmitting
   const form={dataset:{program:'fitness_golf'},elements:{selection:{value:'product:p'}}};
   for(const ids of [[],['privacy'],['rules']])await assert.rejects(api.ensureTicket(form,formData({phone:'TEST',consents:ids}),'application'),/이용규정과 개인정보 안내를 모두/);
   await assert.rejects(api.submitApplication(form,formData({kind:'renewal',payment_method:'cash',consents:['privacy','rules']})),/카드결제 또는 계좌이체/);
+  assert.equal(calls,0);
+});
+
+test('both application forms fix the kind to renewal and explain handwritten first registration',()=>{
+  const {api,nodes}=harness();
+  for(const program of ['fitness_golf','gx']){
+    api.renderApplication(program);const html=nodes.get('memberContent').innerHTML;
+    assert.match(html,/<strong>기존 회원 재등록<\/strong>/);
+    assert.match(html,/<input type="hidden" name="kind" value="renewal"/);
+    assert.match(html,/신규 등록은 최초 이용신청서를 수기로 작성해야 합니다\./);
+    assert.doesNotMatch(html,/<select name="kind"|<option value="new"|신규 이용 신청/);
+    assert.match(html,/이용을 잠시 중단하는 이용 연기는 안내데스크로 문의해 주세요\. 02-826-8907/);
+  }
+});
+
+test('forged new or missing kind is rejected before prepare, uploads or submission',async()=>{
+  const {api,box}=harness();let calls=0;box.guestService=async()=>{calls++;return {}};box.encodeGuestPhoto=async()=>{calls++;return {}};
+  for(const program of ['fitness_golf','gx']){
+    const form={dataset:{program},elements:{selection:{value:program==='gx'?'gx:fake':'product:p'}}};
+    for(const kind of ['new','',undefined])await assert.rejects(api.submitApplication(form,formData({kind,payment_method:'card',consents:['privacy','rules']})),/온라인 신청은 기존 회원 재등록만 가능/);
+  }
   assert.equal(calls,0);
 });

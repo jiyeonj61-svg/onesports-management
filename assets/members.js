@@ -43,8 +43,8 @@ function scopedTerms(program = 'common') {
   return rows(state.home?.terms).filter(term => term.approved === true && term.active === true &&
     ((term.program || 'common') === 'common' || term.program === program));
 }
-function signatureRequired(form, kind) {
-  return form?.signature_mode === 'always' || (form?.signature_mode === 'new' && kind === 'new');
+function signatureRequired(form) {
+  return form?.signature_mode === 'always';
 }
 function navigate(path) {
   if (state.busy) { toast('접수 결과를 확인 중입니다. 잠시만 기다려 주세요.'); return; }
@@ -201,9 +201,9 @@ function renderApplication(program) {
   const classes = gx ? openClasses() : [];
   const available = collectionOpen('application', program) && (products.length > 0 || classes.length > 0);
   const title = form?.title || APPLICATION_DOCUMENTS[program]?.title || (gx ? 'GX 프로그램 신청서' : '헬스·골프 이용신청서');
-  const signature = ['new','always'].includes(form?.signature_mode);
-  content.innerHTML = `<a class="member-back" href="/members/renew" data-member-route>‹ 신청서 선택</a><h1>${text(title)}</h1>${applicationDocument(program)}<form class="member-form" data-form="application" data-program="${program}"><fieldset class="member-form-fieldset" ${available ? '' : 'disabled'}>${honeypot}<section class="member-form-section"><h2>1. 신청자 정보</h2><div class="member-form"><label class="member-field">신청 구분<select name="kind" required><option value="renewal">기존 회원 재등록</option><option value="new">신규 이용 신청</option></select></label>${profileFields()}</div></section><section class="member-form-section"><h2>2. ${gx ? 'GX 프로그램 선택' : '이용권 선택'}</h2><div class="member-form"><label class="member-field">${gx ? 'GX 프로그램·반' : '헬스·골프 이용권'}<select name="selection" required><option value="">${products.length || classes.length ? '선택해 주세요' : '관리자가 상품과 운영기간을 확인하고 있습니다'}</option>${products.map(item => `<option value="product:${text(item.id)}">${text(item.name)} · ${text(item.duration_days)}일 · ${money(item.price)}</option>`).join('')}${classes.map(item => `<option value="gx:${text(item.id)}">${text(item.name)} ${text(item.class_name)} · ${text(weekdaysLabel(item.weekdays))} ${text(item.start_time?.slice(0,5))} · ${money(item.price)}</option>`).join('')}</select></label><div id="memberSelectionDetail"></div><label class="member-field" id="memberDesiredDate" ${gx ? 'hidden' : ''}>희망 시작일<input name="desired_start_date" type="date" value="${todayKst()}" min="${todayKst()}" ${gx ? 'disabled' : 'required'} /><small>기존 이용기간과 관리자 확인 시점을 반영하여 최종 기간을 정합니다.</small></label><div id="memberPeriodPreview"></div><div id="memberGuardianFields"></div></div></section><section class="member-form-section"><h2>3. 결제방식</h2><div class="member-form"><label class="member-check"><input type="radio" name="payment_method" value="card" checked required /><span>현장 카드결제<small>센터 방문 후 카드단말기로 결제합니다.</small></span></label><label class="member-check"><input type="radio" name="payment_method" value="transfer" ${s.transfer_available === true ? '' : 'disabled'} /><span>계좌이체<small>${s.transfer_available === true ? '접수 확인 화면에서 입금 안내를 확인합니다. GX는 자리 배정 후 안내합니다.' : '입금계좌 설정이 필요하여 현재 이용할 수 없습니다.'}</small></span></label><label class="member-field" id="memberPayerField" hidden>입금자명<input name="payer_name" maxlength="60" /></label>${notice('온라인 결제는 진행하지 않습니다. 관리자의 실제 결제 확인 후 재등록이 완료됩니다.')}</div></section><section class="member-form-section"><h2>4. 안내·동의</h2><div class="member-form">${customFields(form)}${applicationConsents(program)}${signature ? `<div id="memberSignatureSection" ${signatureRequired(form,'renewal') ? '' : 'hidden'}><label class="member-field">신청자 서명<small>서명은 비공개 접수기록으로 보관됩니다.</small><canvas id="memberSignature" class="member-signature" aria-label="신청자 서명란"></canvas></label><button class="member-secondary" type="button" data-clear-signature>서명 지우기</button></div>` : ''}<label class="member-check"><input type="checkbox" name="confirm_application" required /><span>상품·금액·신청내용을 확인했습니다. 회원정보와 결제 확인 후 이용기간이 확정됨을 이해했습니다.</span></label></div></section></fieldset>${errorSlot}<button class="member-button member-full" type="submit" data-requires-network data-requires-consents data-unavailable="${!available}" ${available ? '' : 'disabled'}>${available ? '신청 접수하기' : '센터 설정 완료 후 접수 가능'}</button>${renewalFooter}</form>`;
-  if (signatureRequired(form, 'renewal')) initSignature();
+  const signature = signatureRequired(form);
+  content.innerHTML = `<a class="member-back" href="/members/renew" data-member-route>‹ 신청서 선택</a><h1>${text(title)}</h1>${applicationDocument(program)}<form class="member-form" data-form="application" data-program="${program}"><fieldset class="member-form-fieldset" ${available ? '' : 'disabled'}>${honeypot}<section class="member-form-section"><h2>1. 신청자 정보</h2><div class="member-form"><div class="member-field"><span>신청 구분</span><strong>기존 회원 재등록</strong><input type="hidden" name="kind" value="renewal" /></div><p class="member-muted">신규 등록은 최초 이용신청서를 수기로 작성해야 합니다.</p>${profileFields()}</div></section><section class="member-form-section"><h2>2. ${gx ? 'GX 프로그램 선택' : '이용권 선택'}</h2><div class="member-form"><label class="member-field">${gx ? 'GX 프로그램·반' : '헬스·골프 이용권'}<select name="selection" required><option value="">${products.length || classes.length ? '선택해 주세요' : '관리자가 상품과 운영기간을 확인하고 있습니다'}</option>${products.map(item => `<option value="product:${text(item.id)}">${text(item.name)} · ${text(item.duration_days)}일 · ${money(item.price)}</option>`).join('')}${classes.map(item => `<option value="gx:${text(item.id)}">${text(item.name)} ${text(item.class_name)} · ${text(weekdaysLabel(item.weekdays))} ${text(item.start_time?.slice(0,5))} · ${money(item.price)}</option>`).join('')}</select></label><div id="memberSelectionDetail"></div><label class="member-field" id="memberDesiredDate" ${gx ? 'hidden' : ''}>희망 시작일<input name="desired_start_date" type="date" value="${todayKst()}" min="${todayKst()}" ${gx ? 'disabled' : 'required'} /><small>기존 이용기간과 관리자 확인 시점을 반영하여 최종 기간을 정합니다.</small></label><div id="memberPeriodPreview"></div><div id="memberGuardianFields"></div></div></section><section class="member-form-section"><h2>3. 결제방식</h2><div class="member-form"><label class="member-check"><input type="radio" name="payment_method" value="card" checked required /><span>현장 카드결제<small>센터 방문 후 카드단말기로 결제합니다.</small></span></label><label class="member-check"><input type="radio" name="payment_method" value="transfer" ${s.transfer_available === true ? '' : 'disabled'} /><span>계좌이체<small>${s.transfer_available === true ? '접수 확인 화면에서 입금 안내를 확인합니다. GX는 자리 배정 후 안내합니다.' : '입금계좌 설정이 필요하여 현재 이용할 수 없습니다.'}</small></span></label><label class="member-field" id="memberPayerField" hidden>입금자명<input name="payer_name" maxlength="60" /></label>${notice('온라인 결제는 진행하지 않습니다. 관리자의 실제 결제 확인 후 재등록이 완료됩니다.')}</div></section><section class="member-form-section"><h2>4. 안내·동의</h2><div class="member-form">${customFields(form)}${applicationConsents(program)}${signature ? `<div id="memberSignatureSection"><label class="member-field">신청자 서명<small>서명은 비공개 접수기록으로 보관됩니다.</small><canvas id="memberSignature" class="member-signature" aria-label="신청자 서명란"></canvas></label><button class="member-secondary" type="button" data-clear-signature>서명 지우기</button></div>` : ''}<label class="member-check"><input type="checkbox" name="confirm_application" required /><span>상품·금액·신청내용을 확인했습니다. 회원정보와 결제 확인 후 이용기간이 확정됨을 이해했습니다.</span></label></div></section></fieldset>${errorSlot}<button class="member-button member-full" type="submit" data-requires-network data-requires-consents data-unavailable="${!available}" ${available ? '' : 'disabled'}>${available ? '신청 접수하기' : '센터 설정 완료 후 접수 가능'}</button>${renewalFooter}</form>`;
+  if (signature) initSignature();
 }
 
 function selectedItem(form) {
@@ -358,12 +358,13 @@ function accepted(result,ticket) {
   render(); window.scrollTo({top:0,behavior:'instant'});
 }
 async function submitApplication(form,data) {
+  if (data.get('kind') !== 'renewal') throw new Error('온라인 신청은 기존 회원 재등록만 가능합니다. 신규 등록은 최초 이용신청서를 수기로 작성해야 합니다.');
   const {kind,item} = selectedItem(form);
   if (!item) throw new Error('이용권 또는 GX 반을 선택해 주세요.');
   if (!['card','transfer'].includes(data.get('payment_method'))) throw new Error('카드결제 또는 계좌이체를 선택해 주세요.');
   const program = applicationProgram(form);
   const configuration = applicationForm(program);
-  const wantsSignature = signatureRequired(configuration, data.get('kind'));
+  const wantsSignature = signatureRequired(configuration);
   if (wantsSignature && !signatureDrawn) throw new Error('신청자 서명을 입력해 주세요.');
   const epoch = state.epoch;
   const ticket = await ensureTicket(form,data,'application');
@@ -378,7 +379,7 @@ async function submitApplication(form,data) {
   const formValues = {};
   rows(configuration?.fields).forEach(f => { const value = f.type === 'checkbox' ? data.has(`extra_${f.key}`) : (data.get(`extra_${f.key}`) || ''); if (value !== '' || f.required) formValues[f.key] = value; });
   const profile = applicant(data);
-  const result = await guestService('submit_application', { ticket_id:ticket.ticket_id, receipt_key:ticket.receipt_key, program, profile, kind:data.get('kind'), ...(kind === 'gx' ? {gx_class_id:item.id} : {product_id:item.id}), expected_amount:item.price, expected_catalog_updated_at:item.updated_at, expected_form_id:configuration?.id, payment_method:data.get('payment_method'), payer_name:String(data.get('payer_name') || profile.name).trim(), desired_start_date:kind === 'gx' ? undefined : data.get('desired_start_date'), consents:data.getAll('consents'), form_values:formValues, signature_photo_id:wantsSignature ? form._signaturePhoto : undefined, student_name:data.get('student_name') || undefined, guardian_consent:data.has('guardian_consent') });
+  const result = await guestService('submit_application', { ticket_id:ticket.ticket_id, receipt_key:ticket.receipt_key, program, profile, kind:'renewal', ...(kind === 'gx' ? {gx_class_id:item.id} : {product_id:item.id}), expected_amount:item.price, expected_catalog_updated_at:item.updated_at, expected_form_id:configuration?.id, payment_method:data.get('payment_method'), payer_name:String(data.get('payer_name') || profile.name).trim(), desired_start_date:kind === 'gx' ? undefined : data.get('desired_start_date'), consents:data.getAll('consents'), form_values:formValues, signature_photo_id:wantsSignature ? form._signaturePhoto : undefined, student_name:data.get('student_name') || undefined, guardian_consent:data.has('guardian_consent') });
   if (epoch !== state.epoch || !form.isConnected) return;
   accepted(result,ticket);
 }
@@ -490,14 +491,6 @@ document.addEventListener('change',event => {
   if (!form) return;
   if (event.target.name === 'consents') connection();
   if (['selection','desired_start_date'].includes(event.target.name)) selectionChanged(form);
-  if (event.target.name === 'kind') {
-    const section = document.getElementById('memberSignatureSection');
-    if (section) {
-      const wasHidden = section.hidden;
-      section.hidden = !signatureRequired(applicationForm(applicationProgram(form)), event.target.value);
-      if (wasHidden && !section.hidden) initSignature();
-    }
-  }
   if (event.target.name === 'payment_method') {
     const payer = document.getElementById('memberPayerField');
     payer.hidden = event.target.value !== 'transfer'; form.elements.payer_name.required = event.target.value === 'transfer';

@@ -216,6 +216,7 @@ begin
  if action in ('submit_application','submit_request') then
   if (action='submit_application' and r.kind<>'application') or (action='submit_request' and r.kind<>'request') then raise exception '접수 종류를 확인해 주세요.'; end if;
   if r.status<>'draft' then return jsonb_build_object('ok',true,'receipt',public.ms_guest_receipt(r.id),'duplicate',true); end if;
+  if action='submit_application' and payload->>'kind' is distinct from 'renewal' then raise exception '최초 이용 신청은 안내데스크에서 수기 이용신청서를 작성해 주세요. 온라인에서는 기존 회원 재등록만 접수합니다.'; end if;
   if r.expires_at<=now() then raise exception '접수 준비 시간이 지났습니다. 다시 작성해 주세요.'; end if;
   if not coalesce((s->>(case when r.kind='application' then 'applications_enabled' else 'requests_enabled' end))::boolean,false) then raise exception '관리자 운영 설정 확인 후 접수를 시작합니다.'; end if;
   d:=payload->'profile';
@@ -242,7 +243,6 @@ begin
    snap:=jsonb_build_object('title',trim(payload->>'title'),'body',trim(payload->>'body'),'category_id',payload->>'category_id','location',coalesce(payload->>'location',''),'item_name',coalesce(payload->>'item_name',''),'quantity',nullif(payload->>'quantity','')::integer,'photo_ids',to_jsonb(ids),'consents_snapshot',consentj);
    update public.ms_guest_submissions set profile_snapshot=d,request_payload=snap,consents_snapshot=consentj,photo_ids=ids,status='received',submitted_at=now(),updated_at=now() where id=r.id returning * into r;
   else
-   if payload->>'kind' not in ('new','renewal') or payload->>'kind' is null then raise exception '신규 또는 재등록을 선택해 주세요.'; end if;
    if payload->>'payment_method' not in ('card','transfer') or payload->>'payment_method' is null then raise exception '카드 또는 계좌이체를 선택해 주세요.'; end if;
    if payload->>'payment_method'='transfer' and (coalesce(trim(s->>'bank_name'),'')='' or coalesce(trim(s->>'bank_account'),'')='' or coalesce(trim(s->>'bank_holder'),'')='') then raise exception '입금계좌 설정 전에는 계좌이체 신청을 할 수 없습니다.'; end if;
    if not exists(select 1 from public.ms_terms where active and approved and kind='rules' and program=f.program) then raise exception '선택한 프로그램의 이용규정 확인 후 접수를 시작합니다.'; end if;
