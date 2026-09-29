@@ -2,6 +2,8 @@
 
 기존 `member_service`와 관리자 승인 규칙은 유지합니다. 회원용 새 화면은 Auth 로그인·가입·초대 없이 `guest_service`를 사용합니다. 공개 공지·상품·약관·신청서 설정은 기존 `member_service('public_home', {})`를 그대로 읽습니다.
 
+프로그램별 양식·약관·서명 및 현금 처리의 최신 세부 계약은 [프로그램별 신청서 계약](program-forms-contract.md)을 따릅니다.
+
 `supabase.rpc('guest_service', {action, payload})` 응답은 `{ok:true,...}` 또는 `{ok:false,error}`입니다. HTTP 오류와 `ok:false`를 모두 실패로 처리합니다. 실패·오프라인에서 접수 완료를 표시하지 않습니다. 인증키·개인정보를 URL, QR, localStorage, 분석로그에 넣지 않습니다.
 
 ## 비로그인 접수
@@ -13,9 +15,9 @@
 
 ### prepare
 
-입력: `{kind:'application'|'request',phone,consents:[termId],honeypot:''}`
+입력: `{kind:'application'|'request',program:'fitness_golf'|'gx',phone,consents:[termId],honeypot:''}`. 신청은 프로그램을 고정하며 건의는 항상 `common`입니다.
 
-출력: `{ticket_id,receipt_no,receipt_key,expires_at}`. 확인키는 DB에서 생성한 256비트 무작위 64자리 소문자 hex이며 해시만 저장합니다. 응답을 잃으면 새 준비 요청이 필요하지만 최종 제출은 같은 ticket으로 재시도하면 중복 생성되지 않습니다. 준비 유효시간은 20분입니다.
+출력: `{ticket_id,receipt_no,receipt_key,expires_at,program}`. 확인키는 DB에서 생성한 256비트 무작위 64자리 소문자 hex이며 해시만 저장합니다. 응답을 잃으면 새 준비 요청이 필요하지만 최종 제출은 같은 ticket으로 재시도하면 중복 생성되지 않습니다. 준비 유효시간은 20분입니다.
 
 ### upload_photo
 
@@ -40,7 +42,7 @@
   kind: 'new' | 'renewal',
   product_id, // product_id 또는 gx_class_id 중 하나
   gx_class_id,
-  payment_method: 'card' | 'transfer',
+  payment_method: 'cash' | 'card' | 'transfer',
   payer_name, desired_start_date,
   consents: [termId], form_values: {},
   signature_photo_id, student_name, guardian_consent,
@@ -70,7 +72,7 @@ GX는 접수 직후 `reservation_status:'unassigned'`이며 자리 확보·입�
 
 ```js
 {
-  ticket_id, receipt_no, kind, status, intake_status,
+  ticket_id, receipt_no, kind, program, status, intake_status,
   profile_snapshot, // 작성자가 입력한 정보만
   application,     // 변환 전에도 상품/금액/결제/접수상태를 포함
   request,         // 제목/내용/분류/상태/공개답변/사진 ID

@@ -15,7 +15,7 @@ function harness() {
     service: () => { throw new Error('Network access is forbidden in unit tests'); },
     Date, Intl, console,
   });
-  vm.runInContext(`${source}\nglobalThis.functions = { parseCsv, addDays, expectedPeriod, filterRows, kstIso, localDateTime, field, statusGrid, memberUrl, state, guestApplication, guestRequest, guestPhotoSource, validateGuestMatch, renderApplications, renderRequests, renderProfiles };`, context);
+  vm.runInContext(`${source}\nglobalThis.functions = { parseCsv, addDays, expectedPeriod, filterRows, kstIso, localDateTime, field, statusGrid, memberUrl, state, guestApplication, guestRequest, guestPhotoSource, validateGuestMatch, renderApplications, renderRequests, renderProfiles, currentProgramForm, applicationFormText, renderForms, renderTerms };`, context);
   return context.functions;
 }
 const plain = value => JSON.parse(JSON.stringify(value));
@@ -182,4 +182,44 @@ test('profile administration does not offer member account invitations or unlink
   assert.doesNotMatch(root.innerHTML, /초대코드|계정 연결|미연결|이메일/);
   assert.match(root.innerHTML, /가입·로그인 없이/);
   assert.match(root.innerHTML, /현장 확인/);
+});
+
+test('cash payment waits are distinct from card and transfer and exclude cancelled applications', () => {
+  const { state, filterRows, statusGrid } = harness();
+  const rows = ['cash', 'card', 'transfer'].map(payment_method => ({ payment_method, payment_status: 'awaiting', application_status: 'pending' }));
+  rows.push({ payment_method: 'cash', payment_status: 'awaiting', application_status: 'cancelled' });
+  state.filters.applications = { status: 'cash_pending' };
+  assert.deepEqual(plain(filterRows('applications', rows)).map(row => row.payment_method), ['cash']);
+  assert.match(statusGrid(rows[0]), /현장 현금결제 대기/);
+  assert.doesNotMatch(statusGrid(rows[0]), /카드결제/);
+  state.filters.applications = { status: 'card_pending' };
+  assert.deepEqual(plain(filterRows('applications', rows)).map(row => row.payment_method), ['card']);
+});
+
+test('program-specific forms remain separate and an inactive GX form does not fall back to common', () => {
+  const { state, currentProgramForm, renderForms } = harness();
+  state.lists.forms = [
+    { id: 'common', program: 'common', active: true, version: 9, title: '공통 양식', signature_mode: 'new', fields: [] },
+    { id: 'fitness-old', program: 'fitness_golf', active: false, version: 1, title: '지난 헬스 양식', signature_mode: 'new', fields: [] },
+    { id: 'fitness', program: 'fitness_golf', active: true, version: 2, title: '헬스·골프 신청', signature_mode: 'always', fields: [] },
+    { id: 'gx', program: 'gx', active: false, version: 3, title: '<GX 사용신청서>', signature_mode: 'none', fields: [] },
+  ];
+  assert.equal(currentProgramForm('fitness_golf').id, 'fitness');
+  assert.equal(currentProgramForm('gx').id, 'gx');
+  assert.equal(currentProgramForm('gx').active, false);
+  const root = { innerHTML: '' }; renderForms(root);
+  assert.match(root.innerHTML, /data-id="fitness" data-program="fitness_golf"/);
+  assert.match(root.innerHTML, /data-id="gx" data-program="gx"/);
+  assert.match(root.innerHTML, /모든 신청에 서명/);
+  assert.match(root.innerHTML, /&lt;GX 사용신청서&gt;/);
+});
+
+test('application form labels use the submitted snapshot rather than current form settings', () => {
+  const { state, applicationFormText, guestApplication } = harness();
+  state.lists.forms = [{ program: 'gx', title: '새 제목', version: 8 }];
+  const original = { program: 'gx', title: '접수 당시 GX 신청서', version: 2, signature_mode: 'always' };
+  assert.equal(applicationFormText({ form_snapshot: original }), '접수 당시 GX 신청서 · GX 프로그램 · 버전 2');
+  const guest = guestApplication({ id: 'guest', application_payload: { form_snapshot: original } });
+  assert.equal(applicationFormText(guest), '접수 당시 GX 신청서 · GX 프로그램 · 버전 2');
+  assert.equal(applicationFormText({}), '이전 신청서 기록');
 });

@@ -1,236 +1,19 @@
--- OneSports member services: ADDITIVE migration. Never rerun setup.sql on production.
--- Run with a database-owner migration connection after backup and isolated validation.
+-- OneSports program-specific forms: additive upgrade after member-service.sql and guest-service.sql.
+-- Changes no collection settings, consent text, approved flags, applications or historical snapshots.
+-- Apply program-form-content.sql separately for operator-review drafts. Safe to rerun.
 begin;
-create extension if not exists pgcrypto;
-
-create table if not exists public.ms_settings (
- id boolean primary key default true check (id),
- data jsonb not null default '{}'::jsonb check (jsonb_typeof(data)='object'),
- updated_at timestamptz not null default now()
-);
-create table if not exists public.ms_profiles (
- id uuid primary key default gen_random_uuid(),
- user_id uuid unique references auth.users(id),
- name text not null check (length(trim(name)) between 1 and 80),
- building text not null check (length(trim(building)) between 1 and 30),
- unit text not null check (length(trim(unit)) between 1 and 30),
- phone text not null check (phone ~ '^[0-9+() -]{8,24}$'),
- resident_verified boolean not null default false,
- phone_verified boolean not null default false,
- approved boolean not null default false,
- active boolean not null default true,
- created_at timestamptz not null default now(), updated_at timestamptz not null default now()
-);
-create table if not exists public.ms_categories (
- id uuid primary key default gen_random_uuid(), kind text not null check(kind in ('board','request')),
- name text not null check(length(trim(name)) between 1 and 80),
- sort_order integer not null default 0, active boolean not null default true,
- created_at timestamptz not null default now()
-);
-create table if not exists public.ms_products (
- id uuid primary key default gen_random_uuid(),
- name text not null check(length(trim(name)) between 1 and 120),
- facility text not null check(length(facility) between 1 and 80),
- duration_days integer not null check(duration_days between 1 and 3660),
- calculation_method text not null default 'days' check(calculation_method='days'),
- price integer not null check(price between 0 and 100000000),
- effective_from date not null default ((now() at time zone 'Asia/Seoul')::date),
- sort_order integer not null default 0, active boolean not null default false,
- reviewed boolean not null default false,
- created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
- check(not active or reviewed)
-);
-create table if not exists public.ms_gx_classes (
- id uuid primary key default gen_random_uuid(), name text not null check(length(trim(name)) between 1 and 120),
- class_name text not null default '', weekdays integer[] not null default '{}', start_time time,
- period_start date, period_end date, price integer not null check(price between 0 and 100000000),
- capacity integer check(capacity between 1 and 10000),
- registration_start timestamptz, registration_end timestamptz,
- priority_start timestamptz, priority_end timestamptz,
- payment_due_hours integer check(payment_due_hours between 1 and 720),
- waitlist_enabled boolean not null default false,
- status text not null default 'inactive' check(status in ('inactive','open','closed','suspended')),
- reviewed boolean not null default false, is_child boolean not null default false,
- guardian_terms text not null default '',
- created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
- check(weekdays <@ array[1,2,3,4,5,6,7]),
- check(period_end is null or period_end>=period_start),
- check(registration_end is null or registration_end>registration_start),
- check((priority_start is null and priority_end is null) or (priority_start is not null and priority_end>priority_start)),
- check(status<>'open' or priority_start is null or (priority_start>=registration_start and priority_end<=registration_end)),
- check(status<>'open' or (reviewed and capacity is not null and period_start is not null and period_end is not null and start_time is not null and cardinality(weekdays)>0 and registration_start is not null and registration_end is not null and payment_due_hours is not null and (not is_child or length(trim(guardian_terms))>0)))
-);
-create table if not exists public.ms_terms (
- id uuid primary key default gen_random_uuid(), title text not null check(length(trim(title)) between 1 and 120),
- body text not null check(length(trim(body)) between 1 and 30000),
- kind text not null check(kind in ('privacy','rules','guardian')),
- program text not null default 'common' check(program in ('common','fitness_golf','gx')),
- required boolean not null default true, approved boolean not null default false,
- active boolean not null default false, version integer not null default 1,
- created_at timestamptz not null default now(), created_by uuid references auth.users(id),
- check(not active or approved)
-);
-create table if not exists public.ms_forms (
- id uuid primary key default gen_random_uuid(), fields jsonb not null default '[]'::jsonb,
- program text not null default 'common' check(program in ('common','fitness_golf','gx')),
- title text not null default '이용 신청서' check(length(trim(title)) between 1 and 120),
- signature_mode text not null default 'none' check(signature_mode in ('none','new','always')),
- active boolean not null default false, version integer not null default 1,
- created_at timestamptz not null default now(), created_by uuid references auth.users(id),
- check(jsonb_typeof(fields)='array' and jsonb_array_length(fields)<=30)
-);
+alter table public.ms_forms add column if not exists program text not null default 'common' check(program in ('common','fitness_golf','gx'));
+alter table public.ms_forms add column if not exists title text not null default '이용 신청서' check(length(trim(title)) between 1 and 120);
+alter table public.ms_forms add column if not exists signature_mode text not null default 'none' check(signature_mode in ('none','new','always'));
+alter table public.ms_terms add column if not exists program text not null default 'common' check(program in ('common','fitness_golf','gx'));
+alter table public.ms_guest_submissions add column if not exists program text check(program in ('common','fitness_golf','gx'));
+drop index if exists public.ms_forms_one_active;
 create unique index if not exists ms_forms_program_active on public.ms_forms(program) where active;
-create table if not exists public.ms_posts (
- id uuid primary key default gen_random_uuid(), category_id uuid not null references public.ms_categories(id),
- title text not null check(length(trim(title)) between 1 and 160), body text not null check(length(body)<=30000),
- location text not null default '', progress_status text not null default '', action_date date,
- photos text[] not null default '{}', before_photos text[] not null default '{}', after_photos text[] not null default '{}',
- pinned boolean not null default false,
- status text not null default 'draft' check(status in ('draft','published','archived')),
- publish_at timestamptz not null default now(), expires_at timestamptz,
- created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
- created_by uuid references auth.users(id), updated_by uuid references auth.users(id),
- check(expires_at is null or expires_at>publish_at),
- check(cardinality(photos)+cardinality(before_photos)+cardinality(after_photos)<=15)
-);
-create table if not exists public.ms_applications (
- id uuid primary key default gen_random_uuid(), application_no text not null unique,
- member_id uuid not null references public.ms_profiles(id),
- kind text not null check(kind in ('new','renewal')),
- product_id uuid references public.ms_products(id), gx_class_id uuid references public.ms_gx_classes(id),
- product_snapshot jsonb not null, amount integer not null check(amount>=0),
- payment_method text not null check(payment_method in ('cash','card','transfer')), payer_name text not null default '',
- desired_start_date date, previous_start_date date, previous_end_date date,
- proposed_start_date date, proposed_end_date date, final_start_date date, final_end_date date,
- application_status text not null default 'pending' check(application_status in ('new','pending','needs_review','completed','cancelled','refund_required')),
- payment_status text not null default 'awaiting' check(payment_status in ('awaiting','reported','confirmed','refund_required')),
- pass_status text not null default 'pending' check(pass_status in ('pending','applied','needs_review','revoked')),
- external_status text not null default 'pending' check(external_status in ('pending','done')),
- reservation_status text not null default 'none' check(reservation_status in ('none','reserved','waitlisted','confirmed','expired','cancelled')),
- reservation_expires_at timestamptz,
- consents_snapshot jsonb not null, form_snapshot jsonb not null, form_values jsonb not null default '{}',
- signature_path text, student_name text, guardian_consent boolean not null default false,
- idempotency_key uuid not null, submitted_by uuid not null references auth.users(id),
- created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
- processed_at timestamptz, processed_by uuid references auth.users(id),
- check((product_id is null) <> (gx_class_id is null)),
- unique(submitted_by,idempotency_key)
-);
-create table if not exists public.ms_payments (
- id uuid primary key default gen_random_uuid(), application_id uuid not null unique references public.ms_applications(id),
- member_id uuid not null references public.ms_profiles(id), method text not null check(method in ('cash','card','transfer')),
- actual_amount integer not null check(actual_amount>=0), paid_at timestamptz not null,
- confirmed_by uuid not null references auth.users(id), note text not null default '',
- refund_status text not null default 'none' check(refund_status in ('none','required','confirmed')),
- created_at timestamptz not null default now()
-);
-create table if not exists public.ms_passes (
- id uuid primary key default gen_random_uuid(), member_id uuid not null references public.ms_profiles(id),
- application_id uuid unique references public.ms_applications(id), facility text not null, product_name text not null,
- start_date date not null, end_date date not null,
- status text not null default 'active' check(status in ('active','suspended','revoked')),
- gx_class_id uuid references public.ms_gx_classes(id), source text not null default 'application' check(source in ('application','import')),
- created_at timestamptz not null default now(), created_by uuid references auth.users(id),
- check(end_date>=start_date), check(source='import' or application_id is not null)
-);
-create table if not exists public.ms_requests (
- id uuid primary key default gen_random_uuid(), request_no text not null unique,
- member_id uuid not null references public.ms_profiles(id), category_id uuid not null references public.ms_categories(id),
- title text not null check(length(trim(title)) between 1 and 160), body text not null check(length(trim(body)) between 1 and 10000),
- location text not null default '' check(length(location)<=300), photos text[] not null default '{}',
- item_name text not null default '' check(length(item_name)<=150), quantity integer check(quantity between 1 and 100000),
- status text not null default 'received' check(status in ('received','reviewing','in_progress','completed','needs_info','held','declined')),
- reply text not null default '' check(length(reply)<=10000), action_photos text[] not null default '{}',
- assignee uuid references auth.users(id), idempotency_key uuid not null, submitted_by uuid not null references auth.users(id),
- created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
- unique(submitted_by,idempotency_key), check(cardinality(photos)<=10 and cardinality(action_photos)<=10)
-);
-create table if not exists public.ms_request_notes (
- id uuid primary key default gen_random_uuid(), request_id uuid not null references public.ms_requests(id),
- body text not null check(length(trim(body)) between 1 and 10000), created_by uuid not null references auth.users(id),
- created_at timestamptz not null default now()
-);
-create table if not exists public.ms_profile_changes (
- id uuid primary key default gen_random_uuid(), member_id uuid not null references public.ms_profiles(id),
- changes jsonb not null, status text not null default 'pending' check(status in ('pending','approved','rejected')),
- note text not null default '', created_at timestamptz not null default now(), processed_at timestamptz, processed_by uuid references auth.users(id)
-);
-create table if not exists public.ms_invites (
- id uuid primary key default gen_random_uuid(), member_id uuid not null references public.ms_profiles(id),
- code_hash text not null unique, expected_email text, expires_at timestamptz not null,
- used_at timestamptz, used_by uuid references auth.users(id), created_by uuid not null references auth.users(id),
- created_at timestamptz not null default now()
-);
-create table if not exists public.ms_rate_limits (
- actor_id uuid not null references auth.users(id), action text not null, window_start timestamptz not null,
- attempts integer not null default 0, primary key(actor_id,action,window_start)
-);
-create table if not exists public.ms_audit (
- id uuid primary key default gen_random_uuid(), entity text not null, entity_id uuid, action text not null,
- before_data jsonb, after_data jsonb, actor_id uuid references auth.users(id), created_at timestamptz not null default now()
-);
-create table if not exists public.ms_import_batches (
- id uuid primary key default gen_random_uuid(), actor_id uuid not null references auth.users(id),
- idempotency_key uuid not null, content_hash text not null, result jsonb not null,
- created_at timestamptz not null default now(), unique(actor_id,idempotency_key)
-);
-create index if not exists ms_applications_member on public.ms_applications(member_id,created_at desc);
-create index if not exists ms_applications_gx on public.ms_applications(gx_class_id,reservation_status);
-create index if not exists ms_passes_member on public.ms_passes(member_id,facility,end_date);
-create index if not exists ms_requests_member on public.ms_requests(member_id,created_at desc);
-create index if not exists ms_posts_public on public.ms_posts(status,publish_at);
+alter table public.ms_applications drop constraint if exists ms_applications_payment_method_check;
+alter table public.ms_applications add constraint ms_applications_payment_method_check check(payment_method in ('cash','card','transfer'));
+alter table public.ms_payments drop constraint if exists ms_payments_method_check;
+alter table public.ms_payments add constraint ms_payments_method_check check(method in ('cash','card','transfer'));
 
--- Defaults never overwrite an operator's changes. No fake bank, retention period, or operations.
-insert into public.ms_settings(id,data) values(true,'{
- "center_name":"힐스테이트 상도 센트럴파크 1단지 휘트니스센터","contact":"","main_title":"회원분들께 보고드립니다.",
- "subtitle":"회원님의 의견과 센터의 운영 소식을 전합니다.","intro":"",
- "menu_renew":true,"menu_requests":true,"menu_my":true,"menu_board":true,
- "applications_enabled":false,"requests_enabled":false,
- "bank_name":"","bank_account":"","bank_holder":"","transfer_guide":"관리자 확인 후 재등록이 완료됩니다.",
- "card_guide":"사전 신청이 완료되었습니다. 안내데스크에서 회원 이름 또는 신청번호를 말씀해 주세요. 카드결제 확인 후 재등록이 완료됩니다.",
- "request_guide":"다른 사람의 개인정보나 얼굴이 포함되지 않도록 확인해 주세요.",
- "privacy_purpose":"","privacy_items":"","privacy_retention":"","signature_enabled":false,"photo_limit":5
-}'::jsonb) on conflict(id) do nothing;
-insert into public.ms_categories(id,kind,name,sort_order) values
- ('11000000-0000-4000-8000-000000000001','board','조치사항',1),
- ('11000000-0000-4000-8000-000000000002','board','특이사항',2),
- ('11000000-0000-4000-8000-000000000003','board','공지사항',3),
- ('12000000-0000-4000-8000-000000000001','request','이용 불편·민원',1),
- ('12000000-0000-4000-8000-000000000002','request','시설 개선',2),
- ('12000000-0000-4000-8000-000000000003','request','기구 고장',3),
- ('12000000-0000-4000-8000-000000000004','request','청결·위생',4),
- ('12000000-0000-4000-8000-000000000005','request','필요한 물품',5),
- ('12000000-0000-4000-8000-000000000006','request','프로그램 제안',6),
- ('12000000-0000-4000-8000-000000000007','request','기타',7) on conflict(id) do nothing;
-insert into public.ms_products(id,name,facility,duration_days,price,sort_order) values
- ('21000000-0000-4000-8000-000000000001','헬스 1개월','fitness',30,30000,1),
- ('21000000-0000-4000-8000-000000000002','헬스 3개월','fitness',90,68000,2),
- ('21000000-0000-4000-8000-000000000003','헬스 6개월','fitness',180,125000,3),
- ('21000000-0000-4000-8000-000000000004','헬스 12개월','fitness',365,235000,4),
- ('21000000-0000-4000-8000-000000000005','골프 1개월','golf',30,42000,5),
- ('21000000-0000-4000-8000-000000000006','골프 3개월','golf',90,110000,6),
- ('21000000-0000-4000-8000-000000000007','골프 6개월','golf',180,205000,7),
- ('21000000-0000-4000-8000-000000000008','골프 12개월','golf',365,400000,8),
- ('21000000-0000-4000-8000-000000000009','헬스+골프 1개월','fitness_golf',30,60000,9),
- ('21000000-0000-4000-8000-000000000010','헬스+골프 3개월','fitness_golf',90,145000,10),
- ('21000000-0000-4000-8000-000000000011','헬스+골프 6개월','fitness_golf',180,265000,11),
- ('21000000-0000-4000-8000-000000000012','헬스+골프 12개월','fitness_golf',365,515000,12) on conflict(id) do nothing;
-insert into public.ms_gx_classes(id,name,class_name,weekdays,start_time,price,is_child) values
- ('31000000-0000-4000-8000-000000000001','서킷 트레이닝','A',array[1,3,5],'09:00',50000,false),
- ('31000000-0000-4000-8000-000000000002','다이어트댄스','A',array[1,3,5],'10:00',50000,false),
- ('31000000-0000-4000-8000-000000000003','K-POP댄스','A',array[1,3,5],'11:00',50000,false),
- ('31000000-0000-4000-8000-000000000004','요가','B',array[1,3,5],'20:00',50000,false),
- ('31000000-0000-4000-8000-000000000005','줌바','B',array[1,3,5],'21:00',50000,false),
- ('31000000-0000-4000-8000-000000000006','매트필라테스','A',array[2,4],'09:00',40000,false),
- ('31000000-0000-4000-8000-000000000007','라인댄스','A',array[2,4],'10:00',40000,false),
- ('31000000-0000-4000-8000-000000000008','전신근력 & 타바타','A',array[2,4],'11:00',40000,false),
- ('31000000-0000-4000-8000-000000000009','매트필라테스','B',array[2,4],'20:00',40000,false),
- ('31000000-0000-4000-8000-000000000010','라인댄스','B',array[2,4],'21:00',40000,false),
- ('31000000-0000-4000-8000-000000000011','K-POP댄스','B — 초등반',array[6],'11:00',30000,true) on conflict(id) do nothing;
-insert into public.ms_forms(id,fields,active,version) values('41000000-0000-4000-8000-000000000001','[]',true,1) on conflict(id) do nothing;
-
--- Helper routines are not exposed as client mutations.
--- A disabled program-specific form never silently falls back to a general form.
 create or replace function public.ms_form_for(program_name text) returns public.ms_forms
 language plpgsql stable security definer set search_path=pg_catalog,public as $$
 declare selected public.ms_forms%rowtype;
@@ -244,38 +27,12 @@ begin
  if selected.program='common' and selected.signature_mode='none' and coalesce((select (data->>'signature_enabled')::boolean from public.ms_settings where id),false) then selected.signature_mode:='new'; end if;
  return selected;
 end $$;
+
 create or replace function public.ms_terms_for(program_name text) returns setof public.ms_terms
 language sql stable security definer set search_path=pg_catalog,public as $$
  select * from public.ms_terms where active and approved and program in ('common',program_name)
 $$;
 
-create or replace function public.ms_kst_today() returns date language sql stable
-set search_path=pg_catalog as $$ select (now() at time zone 'Asia/Seoul')::date $$;
-create or replace function public.ms_facility_overlap(a text,b text) returns boolean language sql immutable
-set search_path=pg_catalog as $$ select a=b or (a='fitness_golf' and b in ('fitness','golf')) or (b='fitness_golf' and a in ('fitness','golf')) $$;
-create or replace function public.ms_rate(action_name text, max_attempts integer) returns boolean
-language plpgsql security definer set search_path=pg_catalog,public as $$
-declare n integer;
-begin
- if auth.uid() is null then return false; end if;
- insert into public.ms_rate_limits(actor_id,action,window_start,attempts)
- values(auth.uid(),action_name,date_trunc('hour',now()),1)
- on conflict(actor_id,action,window_start) do update set attempts=ms_rate_limits.attempts+1 returning attempts into n;
- return n<=max_attempts;
-end $$;
-create or replace function public.ms_file_read(path text) returns boolean language sql stable security definer
-set search_path=pg_catalog,public as $$
- select public.is_app_admin()
- or (auth.uid() is not null and split_part(path,'/',1) in ('requests','applications') and split_part(path,'/',2)=auth.uid()::text)
- or exists(select 1 from public.ms_requests r join public.ms_profiles m on m.id=r.member_id where m.user_id=auth.uid() and m.active and path=any(r.photos||r.action_photos))
- or exists(select 1 from public.ms_posts p join public.ms_categories c on c.id=p.category_id where p.status='published' and p.publish_at<=now() and (p.expires_at is null or p.expires_at>now()) and c.active and path=any(p.photos||p.before_photos||p.after_photos))
-$$;
-create or replace function public.ms_files_valid(paths text[], kind text, owner_id uuid, max_count integer) returns boolean
-language sql stable security definer set search_path=pg_catalog,public as $$
- select coalesce(cardinality(paths),0)<=max_count and not exists(
- select 1 from unnest(paths) p where p !~ ('^'||kind||'/'||owner_id::text||'/[0-9a-f-]{36}\.(jpg|jpeg|png|webp)$')
- or not exists(select 1 from storage.objects o where o.bucket_id='member-service-files' and o.name=p))
-$$;
 create or replace function public.ms_file_upload(path text) returns boolean language sql stable security definer
 set search_path=pg_catalog,public as $$
  select auth.uid() is not null
@@ -298,17 +55,6 @@ set search_path=pg_catalog,public as $$
   and (select count(*) from storage.objects where bucket_id='member-service-files' and split_part(name,'/',2)=auth.uid()::text and created_at>now()-interval '1 hour')<100
  ))
 $$;
-create or replace function public.ms_expire_gx(class_id uuid) returns void
-language plpgsql security definer set search_path=pg_catalog,public as $$
-begin
- -- Caller must own class row lock. Payment-reported and held applications NEVER expire automatically.
- with changed as (
- update public.ms_applications set reservation_status='expired',application_status='cancelled',updated_at=now()
- where gx_class_id=class_id and reservation_status='reserved' and reservation_expires_at<now()
- and payment_status='awaiting' and application_status in ('new','pending') returning id
- ) insert into public.ms_audit(entity,entity_id,action,actor_id)
- select 'applications',id,'reservation_expired',auth.uid() from changed;
-end $$;
 
 create or replace function public.member_service(action text,payload jsonb default '{}'::jsonb)
 returns jsonb language plpgsql security definer set search_path=pg_catalog,public,extensions as $$
@@ -734,39 +480,320 @@ begin
  raise exception '지원하지 않는 요청입니다.';
 end $$;
 
--- Explicit privilege boundary. No direct SELECT/INSERT/UPDATE/DELETE on private member tables.
-do $$ declare t text; begin
- foreach t in array array['ms_settings','ms_profiles','ms_categories','ms_products','ms_gx_classes','ms_terms','ms_forms','ms_posts','ms_applications','ms_payments','ms_passes','ms_requests','ms_request_notes','ms_profile_changes','ms_invites','ms_rate_limits','ms_audit','ms_import_batches'] loop
-  execute format('alter table public.%I enable row level security',t);
-  execute format('revoke all on table public.%I from public, anon, authenticated',t);
-  -- Defense in depth for accidental future grants; RPC executes as the migration owner.
-  execute format('drop policy if exists ms_admin_only on public.%I',t);
-  execute format('create policy ms_admin_only on public.%I for all to authenticated using (public.is_app_admin()) with check (public.is_app_admin())',t);
- end loop;
+create or replace function public.ms_guest_receipt(receipt_id uuid) returns jsonb
+language plpgsql security definer set search_path=pg_catalog,public as $$
+declare r public.ms_guest_submissions%rowtype; app jsonb; requestj jsonb; cfg jsonb; photos jsonb; bank_allowed boolean:=false;
+begin
+ select * into r from public.ms_guest_submissions where id=receipt_id;
+ select data into cfg from public.ms_settings where id=true;
+ if r.linked_application_id is not null then
+  select to_jsonb(t)-array['member_id','submitted_by','processed_by','idempotency_key','guest_submission_id','previous_start_date','previous_end_date'] into app from public.ms_applications t where id=r.linked_application_id;
+ else app:=r.application_payload; end if;
+ if r.kind='application' and app is not null then
+  if r.linked_application_id is null then app:=app||jsonb_build_object('application_status',r.status); end if;
+  -- Read-time expiry closes bank instructions even before another class operation persists expiry.
+  -- Reported payments and administrator holds are deliberately protected from automatic expiry.
+  if app->>'reservation_status'='reserved' and app->>'payment_status'='awaiting' and app->>'application_status' in ('new','pending') and (app->>'reservation_expires_at')::timestamptz<=now() then app:=app||jsonb_build_object('reservation_status','expired'); end if;
+  bank_allowed:=app->>'payment_method'='transfer' and app->>'application_status' not in ('draft','cancelled','refund_required','needs_review') and coalesce(app->>'reservation_status','none') not in ('unassigned','waitlisted','expired','cancelled');
+ end if;
+ if r.kind='request' then requestj:=r.request_payload||jsonb_build_object('status',r.status,'reply',r.reply,'action_photo_ids',to_jsonb(r.action_photo_ids)); end if;
+ select coalesce(jsonb_agg(jsonb_build_object('id',id,'mime',mime,'bytes',bytes,'purpose',purpose) order by created_at),'[]') into photos from public.ms_guest_photos where submission_id=r.id and (id=any(r.photo_ids||r.action_photo_ids) or (purpose='signature' and id::text=r.application_payload->>'signature_photo_id'));
+ cfg:=cfg-array['privacy_purpose','privacy_items','privacy_retention'];
+ if not bank_allowed then cfg:=cfg-array['bank_name','bank_account','bank_holder']; end if;
+ return jsonb_build_object('ticket_id',r.id,'receipt_no',r.receipt_no,'kind',r.kind,'program',coalesce(r.program,app->'form_snapshot'->>'program','common'),'status',coalesce(app->>'application_status',r.status),'intake_status',r.status,'profile_snapshot',r.profile_snapshot,'application',app,'request',requestj,'photos',photos,'settings',cfg,'created_at',r.created_at,'submitted_at',r.submitted_at);
 end $$;
+
+create or replace function public.guest_service(action text,payload jsonb default '{}'::jsonb) returns jsonb
+language plpgsql security definer set search_path=pg_catalog,public,extensions as $$
+declare
+ adm boolean:=public.is_app_admin(); u uuid:=auth.uid(); s jsonb; r public.ms_guest_submissions%rowtype;
+ p public.ms_products%rowtype; g public.ms_gx_classes%rowtype; a public.ms_applications%rowtype; m public.ms_profiles%rowtype; f public.ms_forms%rowtype;
+ photo public.ms_guest_photos%rowtype; d jsonb; fieldj jsonb; outj jsonb; consentj jsonb; snap jsonb; beforej jsonb;
+ programv text; ident uuid; ids uuid[]; secret text; phone text; v text; key text; op text; kindv text; reservev text;
+ raw bytea; hashv bytea; countv integer; sizev integer; total_bytes bigint; pricev integer; childv boolean;
+ startd date; endd date; prevstart date; prevend date; expires timestamptz;
+begin
+ if action is null or action<>all(array['prepare','receipt','photo','upload_photo','submit_application','submit_request','payment_report','admin_list','admin_detail','admin_create_member','admin_match','admin_convert','admin_action','admin_update_request','admin_upload_photo']) or payload is null or jsonb_typeof(payload)<>'object' or length(payload::text)>800000 then return jsonb_build_object('ok',false,'error','요청 종류, 크기 또는 형식을 확인해 주세요.'); end if;
+ select data into s from public.ms_settings where id=true for share;
+ if action in ('prepare','upload_photo','submit_application','submit_request') then
+  perform pg_advisory_xact_lock(813012); perform pg_advisory_xact_lock(813011);
+  if coalesce(trim(s->>'privacy_purpose'),'')='' or coalesce(trim(s->>'privacy_items'),'')='' or coalesce(trim(s->>'privacy_retention'),'')='' then return jsonb_build_object('ok',false,'error','개인정보 안내 설정 확인 후 접수를 시작합니다.'); end if;
+ end if;
+ if action like 'admin_%' and not adm then return jsonb_build_object('ok',false,'error','승인된 관리자 권한이 필요합니다.'); end if;
+ if not adm then
+  if coalesce(payload->>'honeypot','')<>'' then return jsonb_build_object('ok',false,'error','접수 내용을 확인해 주세요.'); end if;
+  if not public.ms_guest_rate('all:global',1200) then return jsonb_build_object('ok',false,'error','접속이 많습니다. 잠시 후 다시 시도해 주세요.'); end if;
+ end if;
+ -- Validation errors roll back this inner block, retaining anonymous rate counters outside it.
+ begin
+ if action='prepare' then
+  kindv:=payload->>'kind';
+  if kindv not in ('application','request') or kindv is null then raise exception '접수 종류를 확인해 주세요.'; end if;
+  programv:=case when kindv='request' then 'common' else coalesce(nullif(payload->>'program',''),'common') end;
+  if programv not in ('common','fitness_golf','gx') or (kindv='application' and programv='common' and exists(select 1 from public.ms_forms where program<>'common')) then raise exception '신청할 프로그램을 선택하고 접수를 다시 시작해 주세요.'; end if;
+  if kindv='application' then
+   select * into f from public.ms_form_for(programv); if f.id is null then raise exception '선택한 프로그램의 신청서 설정이 필요합니다.'; end if;
+   if not exists(select 1 from public.ms_terms where active and approved and kind='rules' and program=f.program) then raise exception '선택한 프로그램의 이용규정 확인 후 접수를 시작합니다.'; end if;
+  end if;
+  if not coalesce((s->>(case when kindv='application' then 'applications_enabled' else 'requests_enabled' end))::boolean,false) then raise exception '관리자 운영 설정 확인 후 접수를 시작합니다.'; end if;
+  if coalesce(trim(s->>'privacy_purpose'),'')='' or coalesce(trim(s->>'privacy_items'),'')='' or coalesce(trim(s->>'privacy_retention'),'')='' or not exists(select 1 from public.ms_terms_for(programv) where kind='privacy') then raise exception '개인정보 안내 설정 확인 후 접수를 시작합니다.'; end if;
+  if jsonb_typeof(coalesce(payload->'consents','[]'))<>'array' or exists(select 1 from public.ms_terms_for(programv) where kind='privacy' and required and not(coalesce(payload->'consents','[]') ? id::text)) then raise exception '개인정보 안내를 읽고 동의해 주세요.'; end if;
+  phone:=regexp_replace(coalesce(payload->>'phone',''),'[^0-9]','','g');
+  if phone !~ '^[0-9]{8,15}$' then raise exception '연락처를 확인해 주세요.'; end if;
+  hashv:=digest(phone,'sha256');
+  -- No claimed IP or arbitrary headers are trusted. These quotas fail closed under abuse.
+  if not public.ms_guest_rate('prepare:global',100) or not public.ms_guest_rate('prepare:day',300,'day') or not public.ms_guest_rate('prepare:phone:'||encode(hashv,'hex'),5) or not public.ms_guest_rate('prepare:phone-day:'||encode(hashv,'hex'),20,'day') then
+   return jsonb_build_object('ok',false,'error','접수 시도 한도를 초과했습니다. 잠시 후 다시 시도하거나 안내데스크에 문의해 주세요.');
+  end if;
+  secret:=encode(gen_random_bytes(32),'hex');
+  insert into public.ms_guest_submissions(receipt_no,secret_hash,phone_hash,kind,program)
+  values((case when kindv='application' then 'A-' else 'R-' end)||to_char(public.ms_kst_today(),'YYYYMMDD')||'-'||upper(substr(replace(gen_random_uuid()::text,'-',''),1,12)),digest(secret,'sha256'),hashv,kindv,programv) returning * into r;
+  return jsonb_build_object('ok',true,'ticket_id',r.id,'receipt_no',r.receipt_no,'receipt_key',secret,'expires_at',r.expires_at,'program',r.program);
+ end if;
+
+ if action='admin_list' then
+  kindv:=case payload->>'entity' when 'applications' then 'application' when 'requests' then 'request' end;
+  if kindv is null then raise exception '목록 종류를 확인해 주세요.'; end if;
+  select coalesce(jsonb_agg(x.data),'[]') into outj from (
+   select to_jsonb(t)-array['secret_hash','phone_hash']||jsonb_build_object('linked_application',(select to_jsonb(app) from public.ms_applications app where app.id=t.linked_application_id)) data
+   from public.ms_guest_submissions t where t.kind=kindv and t.status<>'draft'
+   and (nullif(payload->>'status','') is null or t.status=payload->>'status')
+   and (nullif(payload->>'search','') is null or (coalesce(t.profile_snapshot::text,'')||t.receipt_no||coalesce(t.request_payload::text,'')) ilike '%'||(payload->>'search')||'%')
+   and (nullif(payload->>'category_id','') is null or t.request_payload->>'category_id'=payload->>'category_id')
+   and (nullif(payload->>'location','') is null or t.request_payload->>'location' ilike '%'||(payload->>'location')||'%')
+   and (nullif(payload->>'date_from','') is null or (t.created_at at time zone 'Asia/Seoul')::date>=(payload->>'date_from')::date)
+   and (nullif(payload->>'date_to','') is null or (t.created_at at time zone 'Asia/Seoul')::date<=(payload->>'date_to')::date)
+   order by t.created_at desc limit 1000) x;
+  return jsonb_build_object('ok',true,'items',outj);
+ end if;
+ if action='photo' and adm then
+  select * into photo from public.ms_guest_photos where id=(payload->>'photo_id')::uuid;
+  if photo.id is null then raise exception '사진을 찾을 수 없습니다.'; end if;
+  return jsonb_build_object('ok',true,'photo',jsonb_build_object('id',photo.id,'mime',photo.mime,'base64',encode(photo.body,'base64')));
+ end if;
+
+ ident:=coalesce(nullif(payload->>'ticket_id','')::uuid,nullif(payload->>'id','')::uuid);
+ if ident is not null then select * into r from public.ms_guest_submissions where id=ident for update;
+ else select * into r from public.ms_guest_submissions where receipt_no=upper(trim(payload->>'receipt_no')) for update; end if;
+ if not (adm and action like 'admin_%') then
+  if not public.ms_guest_secret_matches(payload->>'receipt_key',r.secret_hash) then return jsonb_build_object('ok',false,'error','접수번호와 확인키를 확인해 주세요.'); end if;
+ end if;
+ if r.id is null then raise exception '접수를 찾을 수 없습니다.'; end if;
+ programv:=coalesce(r.program,'common');
+ if action in ('upload_photo','submit_application','submit_request') and r.status='draft' then
+  if r.kind='application' and programv='common' and exists(select 1 from public.ms_forms where program<>'common') then raise exception '프로그램별 신청서가 변경되었습니다. 접수를 다시 시작해 주세요.'; end if;
+  if not exists(select 1 from public.ms_terms_for(programv) where kind='privacy') then raise exception '선택한 접수의 개인정보 안내 확인 후 접수를 시작합니다.'; end if;
+  if r.kind='application' then select * into f from public.ms_form_for(programv); if f.id is null then raise exception '선택한 프로그램의 신청서 설정이 필요합니다.'; end if; end if;
+ end if;
+
+ if action='receipt' then
+  if r.status='draft' then raise exception '아직 최종 접수되지 않았습니다.'; end if;
+  return jsonb_build_object('ok',true,'receipt',public.ms_guest_receipt(r.id));
+ end if;
+ if action='photo' then
+  if r.status='draft' then raise exception '아직 접수되지 않은 사진입니다.'; end if;
+  select * into photo from public.ms_guest_photos where id=(payload->>'photo_id')::uuid and submission_id=r.id and (id=any(r.photo_ids||r.action_photo_ids) or (purpose='signature' and id::text=r.application_payload->>'signature_photo_id'));
+  if photo.id is null then raise exception '사진을 찾을 수 없습니다.'; end if;
+  return jsonb_build_object('ok',true,'photo',jsonb_build_object('id',photo.id,'mime',photo.mime,'base64',encode(photo.body,'base64')));
+ end if;
+
+ if action in ('upload_photo','admin_upload_photo') then
+  kindv:=coalesce(payload->>'purpose',case when action='admin_upload_photo' then 'action' else 'photo' end);
+  if action='upload_photo' then
+   if r.status<>'draft' or r.expires_at<=now() then raise exception '접수 준비 시간이 지났습니다. 다시 작성해 주세요.'; end if;
+   if not coalesce((s->>(case when r.kind='application' then 'applications_enabled' else 'requests_enabled' end))::boolean,false) or not exists(select 1 from public.ms_terms_for(programv) where kind='privacy') then raise exception '현재 사진 접수가 중단되어 있습니다.'; end if;
+   if r.kind='application' and not exists(select 1 from public.ms_terms where active and approved and kind='rules' and program=f.program) then raise exception '선택한 프로그램의 이용규정 확인 후 서명을 접수합니다.'; end if;
+   if not ((r.kind='request' and kindv='photo') or (r.kind='application' and kindv='signature' and f.signature_mode in ('new','always'))) then raise exception '허용되지 않은 사진 종류입니다.'; end if;
+  elsif r.kind<>'request' or r.status='draft' or kindv<>'action' then raise exception '접수된 요청의 조치 사진만 등록할 수 있습니다.'; end if;
+  if payload->>'mime' not in ('image/jpeg','image/png','image/webp') or payload->>'mime' is null then raise exception 'JPEG, PNG, WebP 이미지만 첨부할 수 있습니다.'; end if;
+  raw:=decode(payload->>'base64','base64'); sizev:=octet_length(raw);
+  if sizev is null or sizev not between 12 and 524288 then raise exception '사진 한 장은 512 KiB 이하여야 합니다.'; end if;
+  if not ((payload->>'mime'='image/jpeg' and substring(raw from 1 for 3)=decode('ffd8ff','hex')) or (payload->>'mime'='image/png' and substring(raw from 1 for 8)=decode('89504e470d0a1a0a','hex')) or (payload->>'mime'='image/webp' and substring(raw from 1 for 4)=decode('52494646','hex') and substring(raw from 9 for 4)=decode('57454250','hex'))) then raise exception '이미지 파일 형식을 확인해 주세요.'; end if;
+  hashv:=digest(raw,'sha256');
+  if nullif(payload->>'replace_photo_id','') is not null then
+   if action<>'upload_photo' or r.status<>'draft' then raise exception '최종 접수 전 임시 사진만 교체할 수 있습니다.'; end if;
+   select * into photo from public.ms_guest_photos where id=(payload->>'replace_photo_id')::uuid and submission_id=r.id and purpose=kindv for update;
+   if photo.id is null then raise exception '교체할 사진을 확인해 주세요.'; end if;
+   perform pg_advisory_xact_lock(914201);
+   select coalesce(sum(bytes),0) into total_bytes from public.ms_guest_photos;
+   if total_bytes-photo.bytes+sizev>52428800 then raise exception '사진 보관 한도에 도달했습니다.'; end if;
+   update public.ms_guest_photos set body=raw,bytes=sizev,mime=payload->>'mime',content_hash=hashv where id=photo.id returning * into photo;
+   return jsonb_build_object('ok',true,'photo',jsonb_build_object('id',photo.id,'mime',photo.mime,'bytes',photo.bytes,'purpose',photo.purpose));
+  end if;
+  select * into photo from public.ms_guest_photos where submission_id=r.id and purpose=kindv and content_hash=hashv;
+  if photo.id is null then
+   perform pg_advisory_xact_lock(914201);
+   select count(*) into countv from public.ms_guest_photos where submission_id=r.id and purpose=kindv;
+   if countv>=(case when kindv='signature' then 1 when kindv='photo' then least(3,(s->>'photo_limit')::integer) else 3 end) then raise exception '허용된 사진 개수를 초과했습니다.'; end if;
+   select coalesce(sum(bytes),0) into total_bytes from public.ms_guest_photos;
+   if total_bytes+sizev>52428800 then raise exception '사진 보관 한도에 도달했습니다. 사진 없이 접수하거나 안내데스크에 문의해 주세요.'; end if;
+   insert into public.ms_guest_photos(submission_id,purpose,mime,bytes,body,content_hash,created_by) values(r.id,kindv,payload->>'mime',sizev,raw,hashv,case when action='admin_upload_photo' then u else null end) returning * into photo;
+  end if;
+  return jsonb_build_object('ok',true,'photo',jsonb_build_object('id',photo.id,'mime',photo.mime,'bytes',photo.bytes,'purpose',photo.purpose));
+ end if;
+
+ if action in ('submit_application','submit_request') then
+  if (action='submit_application' and r.kind<>'application') or (action='submit_request' and r.kind<>'request') then raise exception '접수 종류를 확인해 주세요.'; end if;
+  if r.status<>'draft' then return jsonb_build_object('ok',true,'receipt',public.ms_guest_receipt(r.id),'duplicate',true); end if;
+  if r.expires_at<=now() then raise exception '접수 준비 시간이 지났습니다. 다시 작성해 주세요.'; end if;
+  if not coalesce((s->>(case when r.kind='application' then 'applications_enabled' else 'requests_enabled' end))::boolean,false) then raise exception '관리자 운영 설정 확인 후 접수를 시작합니다.'; end if;
+  d:=payload->'profile';
+  if jsonb_typeof(d)<>'object' or coalesce(length(trim(d->>'name')),0) not between 1 and 80 or coalesce(length(trim(d->>'building')),0) not between 1 and 30 or coalesce(length(trim(d->>'unit')),0) not between 1 and 30 or coalesce(d->>'phone','') !~ '^[0-9+() -]{8,24}$' then raise exception '이름, 동, 호수, 연락처를 확인해 주세요.'; end if;
+  phone:=regexp_replace(d->>'phone','[^0-9]','','g');
+  if digest(phone,'sha256')<>r.phone_hash then raise exception '연락처가 변경되었습니다. 접수를 다시 시작해 주세요.'; end if;
+  d:=jsonb_build_object('name',trim(d->>'name'),'building',trim(d->>'building'),'unit',trim(d->>'unit'),'phone',trim(d->>'phone'));
+  if r.kind='application' then
+   if ((nullif(payload->>'product_id','') is null)=(nullif(payload->>'gx_class_id','') is null)) then raise exception '이용권 또는 GX 반 하나를 선택해 주세요.'; end if;
+   v:=case when nullif(payload->>'gx_class_id','') is not null then 'gx' else 'fitness_golf' end;
+   if programv<>'common' and programv<>v then raise exception '신청 프로그램이 변경되었습니다. 접수를 다시 시작해 주세요.'; end if;
+   programv:=v; select * into f from public.ms_form_for(programv);
+  end if;
+  if not exists(select 1 from public.ms_terms_for(programv) where kind='privacy') then raise exception '개인정보 안내 설정 확인 후 접수를 시작합니다.'; end if;
+  childv:=exists(select 1 from public.ms_gx_classes where id=nullif(payload->>'gx_class_id','')::uuid and is_child);
+  if jsonb_typeof(coalesce(payload->'consents','[]'))<>'array' or exists(select 1 from public.ms_terms_for(programv) where required and (kind='privacy' or (r.kind='application' and (kind<>'guardian' or childv))) and not (coalesce(payload->'consents','[]') ? id::text)) then raise exception '최신 필수 안내를 확인하고 동의해 주세요.'; end if;
+  select coalesce(jsonb_agg(to_jsonb(t)-'created_by'||jsonb_build_object('agreed_at',now(),'receipt_no',r.receipt_no)),'[]') into consentj from public.ms_terms_for(programv) t where (kind='privacy' or (r.kind='application' and (kind<>'guardian' or childv))) and (coalesce(payload->'consents','[]') ? t.id::text);
+  if r.kind='request' then
+   if not exists(select 1 from public.ms_categories where id=(payload->>'category_id')::uuid and kind='request' and active) then raise exception '건의 분류를 확인해 주세요.'; end if;
+   if coalesce(length(trim(payload->>'title')),0) not between 1 and 160 or coalesce(length(trim(payload->>'body')),0) not between 1 and 10000 or length(coalesce(payload->>'location',''))>300 or length(coalesce(payload->>'item_name',''))>150 then raise exception '제목과 내용을 확인해 주세요.'; end if;
+   if nullif(payload->>'quantity','') is not null and (payload->>'quantity')::integer not between 1 and 100000 then raise exception '수량을 확인해 주세요.'; end if;
+   select coalesce(array_agg(value::uuid),'{}') into ids from jsonb_array_elements_text(coalesce(payload->'photo_ids','[]'));
+   if cardinality(ids)>least(3,(s->>'photo_limit')::integer) or exists(select 1 from unnest(ids) x where not exists(select 1 from public.ms_guest_photos where id=x and submission_id=r.id and purpose='photo')) then raise exception '첨부 사진을 확인해 주세요.'; end if;
+   snap:=jsonb_build_object('title',trim(payload->>'title'),'body',trim(payload->>'body'),'category_id',payload->>'category_id','location',coalesce(payload->>'location',''),'item_name',coalesce(payload->>'item_name',''),'quantity',nullif(payload->>'quantity','')::integer,'photo_ids',to_jsonb(ids),'consents_snapshot',consentj);
+   update public.ms_guest_submissions set profile_snapshot=d,request_payload=snap,consents_snapshot=consentj,photo_ids=ids,status='received',submitted_at=now(),updated_at=now() where id=r.id returning * into r;
+  else
+   if payload->>'kind' not in ('new','renewal') or payload->>'kind' is null then raise exception '신규 또는 재등록을 선택해 주세요.'; end if;
+   if payload->>'payment_method' not in ('cash','card','transfer') or payload->>'payment_method' is null then raise exception '결제방식을 선택해 주세요.'; end if;
+   if payload->>'payment_method'='transfer' and (coalesce(trim(s->>'bank_name'),'')='' or coalesce(trim(s->>'bank_account'),'')='' or coalesce(trim(s->>'bank_holder'),'')='') then raise exception '입금계좌 설정 전에는 계좌이체 신청을 할 수 없습니다.'; end if;
+   if not exists(select 1 from public.ms_terms where active and approved and kind='rules' and program=f.program) then raise exception '선택한 프로그램의 이용규정 확인 후 접수를 시작합니다.'; end if;
+   if f.id is null or nullif(payload->>'expected_form_id','')::uuid is distinct from f.id then raise exception '신청서가 변경되었습니다. 내용을 다시 확인해 주세요.'; end if;
+   if jsonb_typeof(coalesce(payload->'form_values','{}'))<>'object' or length(coalesce(payload->'form_values','{}')::text)>20000 then raise exception '추가 입력 항목을 확인해 주세요.'; end if;
+   for fieldj in select value from jsonb_array_elements(f.fields) loop
+    key:=fieldj->>'key'; v:=payload->'form_values'->>key;
+    if coalesce((fieldj->>'required')::boolean,false) and (coalesce(trim(v),'')='' or (fieldj->>'type'='checkbox' and v<>'true')) then raise exception '필수 항목을 입력해 주세요: %',fieldj->>'label'; end if;
+    if length(v)>3000 or (nullif(v,'') is not null and fieldj->>'type'='select' and not(fieldj->'options' ? v)) or (v is not null and fieldj->>'type'='checkbox' and v not in ('true','false')) then raise exception '추가 입력 내용을 확인해 주세요.'; end if;
+   end loop;
+   if exists(select 1 from jsonb_object_keys(coalesce(payload->'form_values','{}')) k where not exists(select 1 from jsonb_array_elements(f.fields) x where x->>'key'=k)) then raise exception '허용되지 않은 신청서 항목입니다.'; end if;
+   if ((nullif(payload->>'product_id','') is null)=(nullif(payload->>'gx_class_id','') is null)) then raise exception '이용권 또는 GX 반 하나를 선택해 주세요.'; end if;
+   if nullif(payload->>'product_id','') is not null then
+    select * into p from public.ms_products where id=(payload->>'product_id')::uuid and active and reviewed and effective_from<=public.ms_kst_today();
+    if p.id is null then raise exception '현재 신청할 수 없는 이용권입니다.'; end if;
+    snap:=to_jsonb(p); pricev:=p.price; reservev:='none';
+   else
+    select * into g from public.ms_gx_classes where id=(payload->>'gx_class_id')::uuid;
+    if g.id is null or not g.reviewed or g.status<>'open' or now()<g.registration_start or now()>g.registration_end or g.period_start<public.ms_kst_today() then raise exception '현재 접수 중인 GX 반이 아닙니다.'; end if;
+    if g.is_child and (coalesce(trim(payload->>'student_name'),'')='' or not coalesce((payload->>'guardian_consent')::boolean,false)) then raise exception '수강생 이름과 보호자 동의가 필요합니다.'; end if;
+    snap:=to_jsonb(g); pricev:=g.price; reservev:='unassigned'; startd:=g.period_start; endd:=g.period_end;
+   end if;
+   if nullif(payload->>'expected_amount','')::integer is distinct from pricev or nullif(payload->>'expected_catalog_updated_at','')::timestamptz is distinct from (snap->>'updated_at')::timestamptz then raise exception '금액 또는 이용기간이 변경되었습니다. 다시 확인해 주세요.'; end if;
+   if nullif(payload->>'desired_start_date','')::date>public.ms_kst_today()+366 then raise exception '희망 시작일을 확인해 주세요.'; end if;
+   if (f.signature_mode='always' or (f.signature_mode='new' and payload->>'kind'='new')) and nullif(payload->>'signature_photo_id','') is null then raise exception '선택한 신청서에는 서명이 필요합니다.'; end if;
+   if f.signature_mode='none' and nullif(payload->>'signature_photo_id','') is not null then raise exception '이 신청서는 서명을 수집하지 않습니다.'; end if;
+   if nullif(payload->>'signature_photo_id','') is not null and not exists(select 1 from public.ms_guest_photos where id=(payload->>'signature_photo_id')::uuid and submission_id=r.id and purpose='signature') then raise exception '서명을 확인해 주세요.'; end if;
+   outj:=jsonb_build_object('program',programv,'kind',payload->>'kind','product_id',p.id,'gx_class_id',g.id,'product_snapshot',snap,'amount',pricev,'payment_method',payload->>'payment_method','payer_name',left(coalesce(payload->>'payer_name',d->>'name'),80),'desired_start_date',nullif(payload->>'desired_start_date','')::date,'proposed_start_date',startd,'proposed_end_date',endd,'application_status','received','payment_status','awaiting','pass_status','pending','external_status','pending','reservation_status',reservev,'consents_snapshot',consentj,'form_snapshot',to_jsonb(f)-'created_by','form_values',coalesce(payload->'form_values','{}'),'signature_photo_id',nullif(payload->>'signature_photo_id','')::uuid,'student_name',left(payload->>'student_name',80),'guardian_consent',coalesce((payload->>'guardian_consent')::boolean,false));
+   update public.ms_guest_submissions set profile_snapshot=d,application_payload=outj,product_snapshot=snap,amount=pricev,consents_snapshot=consentj,status='received',submitted_at=now(),updated_at=now() where id=r.id returning * into r;
+  end if;
+  insert into public.ms_audit(entity,entity_id,action,after_data,actor_id) values('guest_'||r.kind,r.id,'submitted',jsonb_build_object('receipt_no',r.receipt_no),null);
+  return jsonb_build_object('ok',true,'receipt',public.ms_guest_receipt(r.id));
+ end if;
+
+ if action='payment_report' then
+  if r.kind<>'application' or r.status in ('draft','cancelled','needs_review') then raise exception '현재 입금 확인을 요청할 수 없습니다.'; end if;
+  if r.linked_application_id is not null then
+   select * into a from public.ms_applications where id=r.linked_application_id for update;
+   if a.payment_method<>'transfer' or a.application_status in ('cancelled','refund_required','needs_review') or a.reservation_status in ('waitlisted','expired','cancelled') then raise exception '배정과 결제방식을 확인해 주세요.'; end if;
+   if a.reservation_status='reserved' and a.payment_status='awaiting' and a.reservation_expires_at<=now() then raise exception 'GX 결제기한이 지났습니다. 입금 전 안내데스크에 확인해 주세요.'; end if;
+   if a.payment_status in ('awaiting','reported') then update public.ms_applications set payment_status='reported',payer_name=left(coalesce(nullif(payload->>'payer_name',''),payer_name),80),updated_at=now() where id=a.id; end if;
+  else
+   if r.application_payload->>'payment_method'<>'transfer' or r.application_payload->>'reservation_status'='unassigned' then raise exception 'GX 자리 배정 전에는 입금하지 마세요.'; end if;
+   update public.ms_guest_submissions set application_payload=application_payload||jsonb_build_object('payment_status','reported','payer_name',left(coalesce(nullif(payload->>'payer_name',''),application_payload->>'payer_name'),80)),updated_at=now() where id=r.id;
+  end if;
+  insert into public.ms_audit(entity,entity_id,action,actor_id) values('guest_application',r.id,'payment_reported',null);
+  return jsonb_build_object('ok',true,'receipt',public.ms_guest_receipt(r.id));
+ end if;
+
+ if not adm then raise exception '허용되지 않은 요청입니다.'; end if;
+ if action='admin_detail' then
+  outj:=to_jsonb(r)-array['secret_hash','phone_hash'];
+  outj:=outj||jsonb_build_object('linked_application',(select to_jsonb(t) from public.ms_applications t where id=r.linked_application_id),'photos',coalesce((select jsonb_agg(jsonb_build_object('id',id,'mime',mime,'bytes',bytes,'purpose',purpose)) from public.ms_guest_photos where submission_id=r.id),'[]'),'internal_notes',coalesce((select jsonb_agg(to_jsonb(t) order by created_at) from public.ms_guest_notes t where submission_id=r.id),'[]'),'history',coalesce((select jsonb_agg(to_jsonb(t) order by created_at) from public.ms_audit t where entity_id=r.id),'[]'));
+  return jsonb_build_object('ok',true,'item',outj);
+ end if;
+ if r.status='draft' then raise exception '아직 최종 접수되지 않았습니다.'; end if;
+ beforej:=to_jsonb(r)-array['secret_hash','phone_hash'];
+ if action='admin_create_member' then
+  if r.kind<>'application' or r.status='cancelled' or r.linked_application_id is not null then raise exception '회원 확인 대기 신청만 처리할 수 있습니다.'; end if;
+  if r.created_profile_id is not null then select * into m from public.ms_profiles where id=r.created_profile_id;
+  else
+   d:=r.profile_snapshot;
+   insert into public.ms_profiles(name,building,unit,phone) values(d->>'name',d->>'building',d->>'unit',d->>'phone') returning * into m;
+   update public.ms_guest_submissions set created_profile_id=m.id,updated_at=now() where id=r.id returning * into r;
+   insert into public.ms_audit(entity,entity_id,action,after_data,actor_id) values('guest_application',r.id,'pending_member_created',jsonb_build_object('member_id',m.id),u);
+  end if;
+  return jsonb_build_object('ok',true,'item',to_jsonb(r)-array['secret_hash','phone_hash'],'profile',to_jsonb(m));
+ elsif action='admin_match' then
+  if r.kind<>'application' or r.status='cancelled' or r.linked_application_id is not null then raise exception '연결 전 신청만 처리할 수 있습니다.'; end if;
+  select * into m from public.ms_profiles where id=(payload->>'member_id')::uuid for update;
+  if m.id is null or not m.active or not m.approved or not m.resident_verified then raise exception '현장 확인 및 승인된 회원을 직접 선택해 주세요.'; end if;
+  update public.ms_guest_submissions set matched_member_id=m.id,updated_at=now() where id=r.id returning * into r;
+ elsif action='admin_convert' then
+  if r.linked_application_id is not null then return jsonb_build_object('ok',true,'item',to_jsonb(r)-array['secret_hash','phone_hash'],'application',(select to_jsonb(t) from public.ms_applications t where id=r.linked_application_id),'duplicate',true); end if;
+  if r.kind<>'application' or r.status='cancelled' or r.matched_member_id is null then raise exception '먼저 현장에서 확인한 회원을 연결해 주세요.'; end if;
+  select * into m from public.ms_profiles where id=r.matched_member_id for update;
+  if not m.active or not m.approved or not m.resident_verified then raise exception '회원 현장 확인과 승인이 필요합니다.'; end if;
+  d:=r.application_payload; snap:=r.product_snapshot;
+  reservev:='none';
+  if nullif(d->>'gx_class_id','') is not null then
+   select * into g from public.ms_gx_classes where id=(d->>'gx_class_id')::uuid for update;
+   if g.id is null or g.status<>'open' or g.period_start<public.ms_kst_today() or now()>g.registration_end then raise exception 'GX 접수기간과 운영상태를 확인해 주세요.'; end if;
+   if to_jsonb(g)->>'period_start' is distinct from snap->>'period_start' or to_jsonb(g)->>'period_end' is distinct from snap->>'period_end' or to_jsonb(g)->>'start_time' is distinct from snap->>'start_time' or to_jsonb(g)->'weekdays' is distinct from snap->'weekdays' then raise exception '신청 후 GX 일정이 변경되었습니다. 회원에게 안내 후 새로 접수해 주세요.'; end if;
+   if g.priority_start is not null and now()>=g.priority_start and now()<g.priority_end and not exists(select 1 from public.ms_passes t join public.ms_gx_classes oldg on oldg.id=t.gx_class_id where t.member_id=m.id and t.status='active' and oldg.name=g.name and oldg.class_name=g.class_name and oldg.period_end=(select max(z.period_end) from public.ms_gx_classes z where z.name=g.name and z.class_name=g.class_name and z.period_end<g.period_start)) then raise exception '우선접수 대상 기존 수강생 확인이 필요합니다.'; end if;
+   perform public.ms_expire_gx(g.id);
+   select count(*) into countv from public.ms_applications where gx_class_id=g.id and reservation_status in ('reserved','confirmed');
+   if countv>=g.capacity then if not g.waitlist_enabled then raise exception '정원 마감입니다. 신청을 보류하고 회원에게 안내해 주세요.'; end if; reservev:='waitlisted';
+   else reservev:='reserved';expires:=now()+make_interval(hours=>g.payment_due_hours);end if;
+   startd:=(snap->>'period_start')::date;endd:=(snap->>'period_end')::date;
+  else
+   select * into p from public.ms_products where id=(d->>'product_id')::uuid;
+   if p.id is null or not p.active or not p.reviewed then raise exception '현재 중단된 상품입니다. 신청을 보류하고 운영자 확인 후 처리해 주세요.'; end if;
+   -- Already accepted price/duration/name stay exactly as consented, even after catalog edits.
+   select min(start_date),max(end_date) into prevstart,prevend from public.ms_passes where member_id=m.id and facility=snap->>'facility' and status='active';
+   startd:=greatest(public.ms_kst_today(),coalesce((d->>'desired_start_date')::date,public.ms_kst_today()),coalesce(prevend+1,public.ms_kst_today()));endd:=startd+(snap->>'duration_days')::integer-1;
+  end if;
+  if exists(select 1 from public.ms_applications where member_id=m.id and application_status not in ('cancelled','refund_required') and ((product_id=nullif(d->>'product_id','')::uuid and application_status<>'completed' and desired_start_date is not distinct from nullif(d->>'desired_start_date','')::date) or gx_class_id=g.id)) then raise exception '동일 회원의 중복 신청 후보가 있습니다. 기존 신청을 확인해 주세요.'; end if;
+  insert into public.ms_applications(application_no,member_id,kind,product_id,gx_class_id,product_snapshot,amount,payment_method,payer_name,desired_start_date,previous_start_date,previous_end_date,proposed_start_date,proposed_end_date,payment_status,reservation_status,reservation_expires_at,consents_snapshot,form_snapshot,form_values,student_name,guardian_consent,idempotency_key,submitted_by,guest_submission_id,created_at)
+  values(r.receipt_no,m.id,d->>'kind',nullif(d->>'product_id','')::uuid,g.id,snap,r.amount,d->>'payment_method',d->>'payer_name',nullif(d->>'desired_start_date','')::date,prevstart,prevend,startd,endd,d->>'payment_status',reservev,expires,r.consents_snapshot,d->'form_snapshot',d->'form_values',d->>'student_name',(d->>'guardian_consent')::boolean,r.id,null,r.id,r.submitted_at) returning * into a;
+  update public.ms_guest_submissions set linked_application_id=a.id,status='converted',updated_at=now() where id=r.id returning * into r;
+  insert into public.ms_audit(entity,entity_id,action,after_data,actor_id) values('applications',a.id,'guest_converted',jsonb_build_object('guest_submission_id',r.id,'member_id',m.id),u);
+ elsif action='admin_action' then
+  if r.kind<>'application' or r.linked_application_id is not null then raise exception '연결 후 신청은 기존 신청·수납 메뉴에서 처리해 주세요.'; end if;
+  if coalesce(trim(payload->>'note'),'')='' or payload->>'operation' is null or payload->>'operation' not in ('hold','cancel') then raise exception '처리 종류와 사유를 입력해 주세요.'; end if;
+  update public.ms_guest_submissions set status=case when payload->>'operation'='hold' then 'needs_review' else 'cancelled' end,reply=left(payload->>'note',2000),updated_at=now() where id=r.id returning * into r;
+ elsif action='admin_update_request' then
+  if r.kind<>'request' then raise exception '건의 접수만 처리할 수 있습니다.'; end if;
+  if payload->>'status' not in ('received','reviewing','in_progress','completed','needs_info','held','declined') or payload->>'status' is null then raise exception '처리상태를 확인해 주세요.'; end if;
+  if payload->>'status'='declined' and coalesce(trim(payload->>'reply'),'')='' then raise exception '반영이 어려운 이유를 회원 답변으로 입력해 주세요.'; end if;
+  if nullif(payload->>'assignee','') is not null and not exists(select 1 from public.app_admins where user_id=(payload->>'assignee')::uuid and active) then raise exception '승인된 담당자를 선택해 주세요.'; end if;
+  select coalesce(array_agg(value::uuid),'{}') into ids from jsonb_array_elements_text(coalesce(payload->'action_photo_ids',to_jsonb(r.action_photo_ids)));
+  if cardinality(ids)>3 or exists(select 1 from unnest(ids) x where not exists(select 1 from public.ms_guest_photos where id=x and submission_id=r.id and purpose='action')) then raise exception '조치 사진을 확인해 주세요.'; end if;
+  update public.ms_guest_submissions set status=payload->>'status',reply=coalesce(payload->>'reply',reply),action_photo_ids=ids,assignee=case when payload ? 'assignee' then nullif(payload->>'assignee','')::uuid else assignee end,updated_at=now() where id=r.id returning * into r;
+  if coalesce(trim(payload->>'internal_note'),'')<>'' then insert into public.ms_guest_notes(submission_id,body,created_by) values(r.id,trim(payload->>'internal_note'),u); end if;
+ else raise exception '지원하지 않는 요청입니다.'; end if;
+ outj:=to_jsonb(r)-array['secret_hash','phone_hash'];
+ insert into public.ms_audit(entity,entity_id,action,before_data,after_data,actor_id) values('guest_'||r.kind,r.id,action,beforej,outj,u);
+ if action='admin_convert' then return jsonb_build_object('ok',true,'item',outj,'application',to_jsonb(a)); end if;
+ return jsonb_build_object('ok',true,'item',outj);
+ exception when others then
+  return jsonb_build_object('ok',false,'error',case when sqlstate in ('22P02','23502','22023','22007','22008') then '입력 형식과 필수 항목을 확인해 주세요.' else sqlerrm end);
+ end;
+end $$;
+
+-- Preserve the existing RPC/policy privilege surface; helper selection is private.
 revoke all on function public.ms_form_for(text) from public,anon,authenticated;
 revoke all on function public.ms_terms_for(text) from public,anon,authenticated;
-revoke all on function public.ms_kst_today() from public,anon,authenticated;
-revoke all on function public.ms_facility_overlap(text,text) from public,anon,authenticated;
-revoke all on function public.ms_rate(text,integer) from public,anon,authenticated;
-revoke all on function public.ms_files_valid(text[],text,uuid,integer) from public,anon,authenticated;
-revoke all on function public.ms_expire_gx(uuid) from public,anon,authenticated;
+revoke all on function public.ms_guest_receipt(uuid) from public,anon,authenticated;
 revoke all on function public.member_service(text,jsonb) from public;
 grant execute on function public.member_service(text,jsonb) to anon,authenticated;
-revoke all on function public.ms_file_read(text) from public;
-grant execute on function public.ms_file_read(text) to anon,authenticated;
+revoke all on function public.guest_service(text,jsonb) from public;
+grant execute on function public.guest_service(text,jsonb) to anon,authenticated;
 revoke all on function public.ms_file_upload(text) from public,anon;
 grant execute on function public.ms_file_upload(text) to authenticated;
-
-insert into storage.buckets(id,name,public,file_size_limit,allowed_mime_types)
-values('member-service-files','member-service-files',false,8388608,array['image/jpeg','image/png','image/webp'])
-on conflict(id) do update set public=false,file_size_limit=excluded.file_size_limit,allowed_mime_types=excluded.allowed_mime_types;
-drop policy if exists ms_files_read on storage.objects;
-create policy ms_files_read on storage.objects for select to anon,authenticated
-using(bucket_id='member-service-files' and public.ms_file_read(name));
-drop policy if exists ms_files_upload on storage.objects;
-create policy ms_files_upload on storage.objects for insert to authenticated with check(
- bucket_id='member-service-files' and public.ms_file_upload(name));
--- No UPDATE policy: immutable object paths prevent silently changing already reviewed attachments.
--- No client DELETE policy: removing references hides photos; retention is an audited operator task.
 commit;

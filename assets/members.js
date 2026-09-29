@@ -1,4 +1,5 @@
 import { service, guestService, encodeGuestPhoto, photoUrl, escapeHtml as e, todayKst } from './member-client.js';
+import { APPLICATION_DOCUMENTS } from './application-documents.js';
 
 const content = document.getElementById('memberContent');
 const state = { home: null, busy: false, epoch: 0, photoEpoch: 0, receipt: null, receiptKey: '', receiptNumber: '', receiptSaved: true, objectURLs: new Set(), submittingPath: '' };
@@ -23,7 +24,27 @@ const badge = (value, fallback = '') => `<span class="member-badge ${['completed
 
 function route() {
   const path = location.pathname.replace(/\/$/, '').replace(/\.html$/, '');
+  if (path.endsWith('/renew/fitness-golf')) return 'fitness_golf';
+  if (path.endsWith('/renew/gx')) return 'gx';
   return path.endsWith('/renew') ? 'renew' : path.endsWith('/requests') ? 'requests' : path.endsWith('/my') ? 'my' : 'home';
+}
+function applicationProgram(form) {
+  const program = form?.dataset?.program || route();
+  return ['fitness_golf', 'gx'].includes(program) ? program : '';
+}
+function applicationForm(program) {
+  const forms = Array.isArray(state.home?.forms) ? state.home.forms : [state.home?.form].filter(Boolean);
+  const specific = forms.find(form => form.program === program);
+  if (specific) return specific;
+  if (rows(state.home?.form_programs).includes(program)) return null;
+  return forms.find(form => !form.program || form.program === 'common') || null;
+}
+function scopedTerms(program = 'common') {
+  return rows(state.home?.terms).filter(term => term.approved === true && term.active === true &&
+    ((term.program || 'common') === 'common' || term.program === program));
+}
+function signatureRequired(form, kind) {
+  return form?.signature_mode === 'always' || (form?.signature_mode === 'new' && kind === 'new');
 }
 function navigate(path) {
   if (state.busy) { toast('접수 결과를 확인 중입니다. 잠시만 기다려 주세요.'); return; }
@@ -53,7 +74,7 @@ function connection() {
 }
 function navigation() {
   const s = settings();
-  const active = route();
+  const active = applicationProgram() ? 'renew' : route();
   const entries = [['home', '홈', '/members', true], ['renew', '빠른 연장', '/members/renew', s.menu_renew !== false], ['requests', '건의·요청', '/members/requests', s.menu_requests !== false], ['my', '접수 조회', '/members/my', s.menu_my !== false]];
   document.getElementById('memberNav').innerHTML = entries.filter(v => v[3]).map(([id, label, href]) => `<a href="${href}" data-member-route class="${active === id ? 'active' : ''}" ${active === id ? 'aria-current="page"' : ''}>${icon(id)}<span>${label}</span></a>`).join('');
   document.getElementById('memberCenterName').textContent = s.center_name || '힐스테이트 상도 센트럴파크 1단지';
@@ -89,8 +110,8 @@ function renderHome() {
   const menus = [['renew', '빠른 연장', '/members/renew', s.menu_renew], ['requests', '건의·요청하기', '/members/requests', s.menu_requests], ['my', '접수 조회', '/members/my', s.menu_my], ['board', '공지·조치사항', '/members#memberBoard', s.menu_board]];
   content.innerHTML = `<section class="member-hero"><p class="member-eyebrow">${text(s.center_name || 'ONE SPORTS FITNESS')}</p><h1>${text(s.main_title || '회원분들께 보고드립니다.')}</h1><p>${text(s.subtitle || '회원님의 의견과 센터의 운영 소식을 전합니다.')}</p></section><nav class="member-menu-grid" aria-label="바로가기">${menus.filter(v => v[3] !== false).map(([id, label, href]) => `<a class="member-menu" href="${href}" data-member-route>${icon(id)}<span>${label} <span aria-hidden="true">›</span></span></a>`).join('')}</nav>${s.intro ? notice(s.intro) : ''}${s.menu_board === false ? '' : `<section id="memberBoard">${posts.filter(v => v.pinned).length ? `<section class="member-section"><h2>상단 고정 공지</h2>${posts.filter(v => v.pinned).map(postCard).join('')}</section>` : ''}${rows(state.home.categories).map(cat => `<section class="member-section"><div class="member-section-heading"><h2>${text(cat.name === '조치사항' ? '최근 조치사항' : cat.name)}</h2></div>${posts.filter(v => v.category_id === cat.id && !v.pinned).map(postCard).join('') || empty('등록된 소식이 없습니다.')}</section>`).join('') || empty('게시된 소식이 없습니다. 새로운 센터 소식을 이곳에서 확인해 주세요.')}</section>`}`;
 }
-function customFields() {
-  return rows(state.home.form?.fields).map(f => {
+function customFields(form) {
+  return rows(form?.fields).map(f => {
     const name = `extra_${f.key}`;
     const attrs = `${f.required ? 'required' : ''} name="${text(name)}"`;
     const help = f.help ? `<small>${text(f.help)}</small>` : '';
@@ -100,16 +121,18 @@ function customFields() {
     return `<label class="member-field">${text(f.label)}${f.required ? ' (필수)' : ''}<input ${attrs} maxlength="500" />${help}</label>`;
   }).join('');
 }
-function termsMarkup(kind = 'all') {
-  return rows(state.home.terms).filter(t => t.kind !== 'guardian' && (kind === 'all' || t.kind === kind)).map(t => `<div class="member-term"><label class="member-check"><input type="checkbox" name="consents" value="${text(t.id)}" ${t.required ? 'required' : ''} /><span>${text(t.title)} ${t.required ? '(필수)' : '(선택)'}</span></label><details><summary>내용 보기 · 버전 ${text(t.version)}</summary><div class="member-pre">${text(t.body)}</div></details></div>`).join('');
+function termsMarkup(kind = 'all', program = 'common') {
+  return scopedTerms(program).filter(t => t.kind !== 'guardian' && (kind === 'all' || t.kind === kind)).map(t => `<div class="member-term"><label class="member-check"><input type="checkbox" name="consents" value="${text(t.id)}" ${t.required ? 'required' : ''} /><span>${text(t.title)} ${t.required ? '(필수)' : '(선택)'}</span></label><details><summary>내용 보기 · 버전 ${text(t.version)}</summary><div class="member-pre">${text(t.body)}</div></details></div>`).join('');
 }
 
-function collectionOpen(kind) {
+function collectionOpen(kind, program = applicationProgram()) {
   const s = settings();
-  const terms = rows(state.home?.terms);
-  const privacy = terms.some(t => t.kind === 'privacy' && t.approved === true && t.active === true);
+  const terms = scopedTerms(kind === 'request' ? 'common' : program);
+  const privacy = terms.some(t => t.kind === 'privacy');
   if (kind === 'request') return s.requests_enabled === true && privacy && rows(state.home?.request_categories).length > 0;
-  return s.applications_enabled === true && privacy && terms.some(t => t.kind === 'rules' && t.approved === true && t.active === true) && !!state.home?.form?.id;
+  const form = applicationForm(program);
+  const rulesProgram = form?.program || 'common';
+  return ['fitness_golf','gx'].includes(program) && s.applications_enabled === true && privacy && terms.some(t => t.kind === 'rules' && (t.program || 'common') === rulesProgram) && !!form?.id;
 }
 function setupNotice() {
   return notice('가입 없이 건의·요청을 접수하는 화면입니다. 현재 개인정보 안내 등 관리자 설정을 확인하고 있어 입력과 접수는 아직 열리지 않았습니다.', 'warning');
@@ -118,15 +141,51 @@ function profileFields() {
   return `${field('신청자 이름', 'name', '', 'required maxlength="60" autocomplete="name"')}<div class="member-two-columns">${field('동', 'building', '', 'required maxlength="20"')}${field('호수', 'unit', '', 'required maxlength="20"')}</div>${field('휴대폰 번호', 'phone', '', 'type="tel" autocomplete="tel" required maxlength="24" inputmode="tel"')}<p class="member-muted">신청 확인과 연락에 사용합니다. 입력한 정보로 기존 회원정보를 자동 조회하거나 가족 정보를 보여주지 않습니다.</p>`;
 }
 const honeypot = '<div class="member-honeypot" aria-hidden="true"><label>웹사이트<input name="website" type="text" tabindex="-1" autocomplete="off" /></label></div>';
-function renderRenew() {
-  const s = settings();
-  const products = rows(state.home.products);
-  const classes = rows(state.home.gx_classes).filter(v => v.status === 'open' && new Date(v.registration_start) <= new Date() && new Date(v.registration_end) >= new Date());
-  const available = collectionOpen('application') && (products.length > 0 || classes.length > 0);
-  content.innerHTML = `${pageHeading('빠른 연장·재등록')}<form class="member-form" data-form="application"><fieldset class="member-form-fieldset" ${available ? '' : 'disabled'}>${honeypot}<section class="member-form-section"><h2>1. 신청자 정보</h2><div class="member-form"><label class="member-field">신청 구분<select name="kind" required><option value="renewal">기존 회원 재등록</option><option value="new">신규 이용 신청</option></select></label>${profileFields()}</div></section><section class="member-form-section"><h2>2. 이용권 선택</h2><div class="member-form"><label class="member-field">이용권 또는 GX 반<select name="selection" required><option value="">${products.length || classes.length ? '선택해 주세요' : '관리자가 이용권을 확인하고 있습니다'}</option>${products.length ? `<optgroup label="헬스·골프 이용권">${products.map(v => `<option value="product:${text(v.id)}">${text(v.name)} · ${text(v.duration_days)}일 · ${money(v.price)}</option>`).join('')}</optgroup>` : ''}${classes.length ? `<optgroup label="GX 프로그램">${classes.map(v => `<option value="gx:${text(v.id)}">${text(v.name)} ${text(v.class_name)} · ${text(v.start_time?.slice(0,5))} · ${money(v.price)}</option>`).join('')}</optgroup>` : ''}</select></label><div id="memberSelectionDetail"></div><label class="member-field" id="memberDesiredDate">희망 시작일<input name="desired_start_date" type="date" value="${todayKst()}" min="${todayKst()}" required /><small>기존 이용기간과 관리자 확인 시점을 반영하여 최종 기간을 정합니다.</small></label><div id="memberPeriodPreview"></div><div id="memberGuardianFields"></div></div></section><section class="member-form-section"><h2>3. 결제방식</h2><div class="member-form"><label class="member-check"><input type="radio" name="payment_method" value="card" checked required /><span>현장 카드결제<small>센터 방문 후 카드단말기로 결제합니다.</small></span></label><label class="member-check"><input type="radio" name="payment_method" value="transfer" ${s.transfer_available === true ? '' : 'disabled'} /><span>계좌이체<small>${s.transfer_available === true ? '접수 확인 화면에서 입금 안내를 확인합니다. GX는 자리 배정 후 안내합니다.' : '입금계좌 설정이 필요하여 현재 이용할 수 없습니다.'}</small></span></label><label class="member-field" id="memberPayerField" hidden>입금자명<input name="payer_name" maxlength="60" /></label>${notice('온라인 결제는 진행하지 않습니다. 관리자의 실제 결제 확인 후 재등록이 완료됩니다.')}</div></section><section class="member-form-section"><h2>4. 안내·동의</h2><div class="member-form">${customFields()}${termsMarkup()}${!rows(state.home.terms).length ? notice('관리자가 확인한 개인정보 안내와 이용규정이 이곳에 표시됩니다.', 'warning') : ''}${s.signature_enabled ? '<div id="memberSignatureSection" hidden><label class="member-field">신규 신청자 서명<small>서명은 비공개 접수기록으로 보관됩니다.</small><canvas id="memberSignature" class="member-signature" aria-label="신청자 서명란"></canvas></label><button class="member-secondary" type="button" data-clear-signature>서명 지우기</button></div>' : ''}<label class="member-check"><input type="checkbox" name="confirm_application" required /><span>상품·금액·신청내용을 확인했습니다. 회원정보와 결제 확인 후 이용기간이 확정됨을 이해했습니다.</span></label></div></section></fieldset>${errorSlot}<button class="member-button member-full" type="submit" data-requires-network data-unavailable="${!available}" ${available ? '' : 'disabled'}>${available ? '가입 없이 신청 접수하기' : '센터 설정 완료 후 접수 가능'}</button><p class="member-muted">이용을 잠시 중단하는 이용 연기는 안내데스크로 문의해 주세요. 02-826-8907</p></form>`;
+const renewalFooter = '<p class="member-muted">이용을 잠시 중단하는 이용 연기는 안내데스크로 문의해 주세요. 02-826-8907</p>';
+function weekdaysLabel(value) {
+  if (!Array.isArray(value)) return String(value || '');
+  return value.map(day => typeof day === 'number' ? ['','월','화','수','목','금','토','일'][day] || '' : day).join('·');
 }
+function programCatalog(program) {
+  return rows(program === 'gx' ? state.home.gx_classes : state.home.products);
+}
+function openClasses() {
+  const now = new Date();
+  return rows(state.home.gx_classes).filter(item => item.status === 'open' && new Date(item.registration_start) <= now && new Date(item.registration_end) >= now);
+}
+function applicationDocument(program) {
+  const document = APPLICATION_DOCUMENTS[program];
+  if (!document) return '';
+  const live = programCatalog(program);
+  const prices = live.length ? live : rows(document.prices);
+  const gx = program === 'gx';
+  const title = live.length ? (gx ? 'GX 프로그램 시간표·요금' : '이용권 요금표') : '신청서 기준 요금표';
+  const selectedForm = applicationForm(program);
+  const rulesProgram = selectedForm ? selectedForm.program || 'common' : program;
+  const rules = scopedTerms(program).filter(term => term.kind === 'rules' && (term.program || 'common') === rulesProgram);
+  const privacy = scopedTerms(program).some(term => term.kind === 'privacy');
+  return `<section class="member-document" aria-label="${text(document.title)} 안내"><details class="member-card" open><summary><h2>${title}</h2></summary>${!live.length ? '<p class="member-muted">첨부 신청서 기준 안내입니다. 접수 가능한 상품과 운영기간은 센터 확인 후 표시됩니다.</p>' : ''}<div class="member-table-scroll" tabindex="0" role="region" aria-label="${title}"><table class="member-price-table"><thead><tr>${gx ? '<th scope="col">요일·시간</th><th scope="col">프로그램</th>' : '<th scope="col">이용권</th><th scope="col">기간</th>'}<th scope="col">금액</th></tr></thead><tbody>${prices.map(item => `<tr>${gx ? `<td>${text(weekdaysLabel(item.weekdays))}<br>${text(item.time || item.start_time?.slice(0,5))}</td><th scope="row">${text(item.name)} ${text(item.class_name || '')}${item.is_child ? '<small>어린이 수업</small>' : ''}${item.period_start ? `<small>${date(item.period_start)} ~ ${date(item.period_end)}</small>` : ''}</th>` : `<th scope="row">${text(item.name)}</th><td>${text(item.period_label ? `${item.period_label} (${item.duration_days}일)` : (item.duration_days ? `${item.duration_days}일` : ''))}</td>`}<td>${money(item.price)}</td></tr>`).join('')}</tbody></table></div></details>${rules.length ? `<details class="member-card"><summary><h2>이용규정 안내</h2></summary>${rules.map(term => `<h3>${text(term.title)}</h3><div class="member-pre">${text(term.body)}</div>`).join('')}</details>` : rows(document.sections).length ? `<details class="member-card"><summary><h2>신청서 이용규정 안내</h2></summary>${rows(document.sections).map(section => `<h3>${text(section.title)}</h3><div class="member-pre">${text(section.body)}</div>`).join('')}</details>` : ''}${!privacy && document.privacy ? `<details class="member-card"><summary><h2>개인정보 안내 (설정 중)</h2></summary><h3>${text(document.privacy.title)}</h3><div class="member-pre">${text(document.privacy.body)}</div></details>` : ''}</section>`;
+}
+function renderRenew() {
+  content.innerHTML = `${pageHeading('빠른 연장·재등록', '이용하실 프로그램의 신청서를 선택해 주세요.')}<div class="member-application-options">${[['fitness_golf','fitness-golf'],['gx','gx']].map(([program,path]) => { const document = APPLICATION_DOCUMENTS[program]; return `<a class="member-application-option" href="/members/renew/${path}" data-member-route><span class="member-eyebrow">${program === 'gx' ? 'GX PROGRAM' : 'FITNESS & GOLF'}</span><h2>${text(applicationForm(program)?.title || document?.title || (program === 'gx' ? 'GX 프로그램 신청서' : '헬스·골프 이용신청서'))}</h2><p>${text(document?.description || '')}</p><span class="member-application-link">신청서 보기 <span aria-hidden="true">→</span></span></a>`; }).join('')}</div>${renewalFooter}`;
+}
+function renderApplication(program) {
+  const s = settings();
+  const gx = program === 'gx';
+  const form = applicationForm(program);
+  const products = gx ? [] : rows(state.home.products);
+  const classes = gx ? openClasses() : [];
+  const available = collectionOpen('application', program) && (products.length > 0 || classes.length > 0);
+  const title = form?.title || APPLICATION_DOCUMENTS[program]?.title || (gx ? 'GX 프로그램 신청서' : '헬스·골프 이용신청서');
+  const signature = ['new','always'].includes(form?.signature_mode);
+  content.innerHTML = `<a class="member-back" href="/members/renew" data-member-route>‹ 신청서 선택</a><h1>${text(title)}</h1>${applicationDocument(program)}<form class="member-form" data-form="application" data-program="${program}"><fieldset class="member-form-fieldset" ${available ? '' : 'disabled'}>${honeypot}<section class="member-form-section"><h2>1. 신청자 정보</h2><div class="member-form"><label class="member-field">신청 구분<select name="kind" required><option value="renewal">기존 회원 재등록</option><option value="new">신규 이용 신청</option></select></label>${profileFields()}</div></section><section class="member-form-section"><h2>2. ${gx ? 'GX 프로그램 선택' : '이용권 선택'}</h2><div class="member-form"><label class="member-field">${gx ? 'GX 프로그램·반' : '헬스·골프 이용권'}<select name="selection" required><option value="">${products.length || classes.length ? '선택해 주세요' : '관리자가 상품과 운영기간을 확인하고 있습니다'}</option>${products.map(item => `<option value="product:${text(item.id)}">${text(item.name)} · ${text(item.duration_days)}일 · ${money(item.price)}</option>`).join('')}${classes.map(item => `<option value="gx:${text(item.id)}">${text(item.name)} ${text(item.class_name)} · ${text(weekdaysLabel(item.weekdays))} ${text(item.start_time?.slice(0,5))} · ${money(item.price)}</option>`).join('')}</select></label><div id="memberSelectionDetail"></div><label class="member-field" id="memberDesiredDate" ${gx ? 'hidden' : ''}>희망 시작일<input name="desired_start_date" type="date" value="${todayKst()}" min="${todayKst()}" ${gx ? 'disabled' : 'required'} /><small>기존 이용기간과 관리자 확인 시점을 반영하여 최종 기간을 정합니다.</small></label><div id="memberPeriodPreview"></div><div id="memberGuardianFields"></div></div></section><section class="member-form-section"><h2>3. 결제방식</h2><div class="member-form"><label class="member-check"><input type="radio" name="payment_method" value="card" checked required /><span>현장 카드결제<small>센터 방문 후 카드단말기로 결제합니다.</small></span></label><label class="member-check"><input type="radio" name="payment_method" value="cash" /><span>현장 현금결제<small>안내데스크에서 결제하고 관리자 확인 후 반영합니다.</small></span></label><label class="member-check"><input type="radio" name="payment_method" value="transfer" ${s.transfer_available === true ? '' : 'disabled'} /><span>계좌이체<small>${s.transfer_available === true ? '접수 확인 화면에서 입금 안내를 확인합니다. GX는 자리 배정 후 안내합니다.' : '입금계좌 설정이 필요하여 현재 이용할 수 없습니다.'}</small></span></label><label class="member-field" id="memberPayerField" hidden>입금자명<input name="payer_name" maxlength="60" /></label>${notice('온라인 결제는 진행하지 않습니다. 관리자의 실제 결제 확인 후 재등록이 완료됩니다.')}</div></section><section class="member-form-section"><h2>4. 안내·동의</h2><div class="member-form">${customFields(form)}${termsMarkup('all', program)}${!scopedTerms(program).length ? notice('관리자가 확인한 개인정보 안내와 이용규정이 이곳에 표시됩니다.', 'warning') : ''}${signature ? `<div id="memberSignatureSection" ${signatureRequired(form,'renewal') ? '' : 'hidden'}><label class="member-field">신청자 서명<small>서명은 비공개 접수기록으로 보관됩니다.</small><canvas id="memberSignature" class="member-signature" aria-label="신청자 서명란"></canvas></label><button class="member-secondary" type="button" data-clear-signature>서명 지우기</button></div>` : ''}<label class="member-check"><input type="checkbox" name="confirm_application" required /><span>상품·금액·신청내용을 확인했습니다. 회원정보와 결제 확인 후 이용기간이 확정됨을 이해했습니다.</span></label></div></section></fieldset>${errorSlot}<button class="member-button member-full" type="submit" data-requires-network data-unavailable="${!available}" ${available ? '' : 'disabled'}>${available ? '신청 접수하기' : '센터 설정 완료 후 접수 가능'}</button>${renewalFooter}</form>`;
+  if (signatureRequired(form, 'renewal')) initSignature();
+}
+
 function selectedItem(form) {
   const [kind, id] = (form.elements.selection.value || '').split(':');
+  const program = applicationProgram(form);
+  if (!['product','gx'].includes(kind) || (program && (kind === 'gx' ? 'gx' : 'fitness_golf') !== program)) return {kind,item:null};
   return { kind, item: rows(kind === 'gx' ? state.home.gx_classes : state.home.products).find(v => v.id === id) };
 }
 function addDays(value, days) { const d = new Date(`${value}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + days); return d.toISOString().slice(0,10); }
@@ -140,7 +199,7 @@ function selectionChanged(form) {
   const gx = kind === 'gx';
   desired.hidden = gx; form.elements.desired_start_date.required = !gx; form.elements.desired_start_date.disabled = gx;
   detail.innerHTML = `<div class="member-price-box"><div class="member-price">${money(item.price)}</div><dl class="member-definition"><dt>상품</dt><dd>${text(item.name)} ${text(item.class_name || '')}</dd>${gx ? `<dt>수강기간</dt><dd>${date(item.period_start)} ~ ${date(item.period_end)}</dd><dt>요일·시간</dt><dd>${rows(item.weekdays).map(v => ['','월','화','수','목','금','토','일'][v] || '').join('·')} ${text(item.start_time?.slice(0,5))}</dd><dt>정원·남은 자리</dt><dd>${text(item.capacity)}명 · ${text(item.remaining_seats ?? '확인 중')}자리</dd>` : `<dt>이용기간</dt><dd>${text(item.duration_days)}일 · 시작일 포함</dd>`}</dl></div>${gx ? notice('남은 자리는 조회 시점 기준입니다. 관리자가 회원 확인과 자리 배정을 진행합니다. 자리 배정 전에는 입금하지 마세요.') : ''}`;
-  guardian.innerHTML = gx && item.is_child ? `<div class="member-form">${field('어린이 수강생 이름', 'student_name', '', 'required maxlength="60"')}<p class="member-muted">위 신청자 정보에는 보호자 정보를 입력해 주세요. 어린이 수강생과 보호자를 구분하여 접수합니다.</p><div class="member-pre member-notice">${text(item.guardian_terms || '보호자 안내를 확인해 주세요.')}</div><label class="member-check"><input name="guardian_consent" type="checkbox" required /><span>보호자로서 어린이 수강 신청과 위 안내에 동의합니다.</span></label>${rows(state.home.terms).filter(t => t.kind === 'guardian').map(t => `<div class="member-term"><label class="member-check"><input name="consents" type="checkbox" value="${text(t.id)}" ${t.required ? 'required' : ''} /><span>${text(t.title)}${t.required ? ' (필수)' : ''}</span></label><details><summary>내용 보기</summary><div class="member-pre">${text(t.body)}</div></details></div>`).join('')}</div>` : '';
+  guardian.innerHTML = gx && item.is_child ? `<div class="member-form">${field('어린이 수강생 이름', 'student_name', '', 'required maxlength="60"')}<p class="member-muted">위 신청자 정보에는 보호자 정보를 입력해 주세요. 어린이 수강생과 보호자를 구분하여 접수합니다.</p><div class="member-pre member-notice">${text(item.guardian_terms || '보호자 안내를 확인해 주세요.')}</div><label class="member-check"><input name="guardian_consent" type="checkbox" required /><span>보호자로서 어린이 수강 신청과 위 안내에 동의합니다.</span></label>${scopedTerms('gx').filter(t => t.kind === 'guardian').map(t => `<div class="member-term"><label class="member-check"><input name="consents" type="checkbox" value="${text(t.id)}" ${t.required ? 'required' : ''} /><span>${text(t.title)}${t.required ? ' (필수)' : ''}</span></label><details><summary>내용 보기</summary><div class="member-pre">${text(t.body)}</div></details></div>`).join('')}</div>` : '';
   if (gx) { preview.innerHTML = ''; return; }
   const start = form.elements.desired_start_date.value || todayKst();
   const end = addDays(start, Number(item.duration_days) - 1);
@@ -163,7 +222,7 @@ function applicationCard(app) {
   const blockedSeat = ['unassigned','waitlisted','expired','cancelled'].includes(app.reservation_status);
   const blockedStatus = ['cancelled','refund_required','needs_review','held'].includes(app.application_status) || ['cancelled','held'].includes(state.receipt?.status);
   const payable = !blockedSeat && !blockedStatus && ['awaiting','reported'].includes(app.payment_status);
-  return `<article class="member-card"><h2>${text(snapshot.name || '이용 신청')} ${text(snapshot.class_name || '')}</h2><div class="member-status-row">${badge(app.application_status)}${badge(app.payment_status)}${app.pass_status === 'applied' ? badge('applied') : ''}${app.reservation_status !== 'none' ? badge(app.reservation_status) : ''}</div><dl class="member-definition"><dt>신청 구분</dt><dd>${app.kind === 'new' ? '신규' : '재등록'}</dd><dt>접수 당시 금액</dt><dd><strong>${money(app.amount)}</strong></dd><dt>결제방식</dt><dd>${app.payment_method === 'transfer' ? '계좌이체' : '현장 카드결제'}</dd>${app.student_name ? `<dt>어린이 수강생</dt><dd>${text(app.student_name)}</dd>` : ''}${app.desired_start_date ? `<dt>희망 시작일</dt><dd>${date(app.desired_start_date)}</dd>` : ''}<dt>${app.final_start_date ? '최종 이용기간' : '이용기간'}</dt><dd>${app.final_start_date || app.proposed_start_date ? `${date(app.final_start_date || app.proposed_start_date)} ~ ${date(app.final_end_date || app.proposed_end_date)}` : '관리자 회원 확인 후 확정'}</dd>${app.reservation_expires_at && app.reservation_status === 'reserved' ? `<dt>결제기한</dt><dd>${when(app.reservation_expires_at)}</dd>` : ''}${app.pass_status === 'applied' ? `<dt>외부 출입프로그램</dt><dd>${app.external_status === 'done' ? '관리자 반영 완료' : '관리자 별도 반영 대기'}</dd>` : ''}</dl>${app.reservation_status === 'unassigned' ? notice('회원 확인과 GX 자리 배정을 기다리고 있습니다. 자리 배정 전에는 입금하지 마세요.', 'warning') : app.reservation_status === 'waitlisted' ? notice('현재 대기접수 상태입니다. 자리 배정 전에는 입금하지 마세요.', 'warning') : ''}${app.application_status === 'needs_review' ? notice('관리자가 신청 또는 결제 내용을 확인 중입니다. 센터 안내를 확인해 주세요.', 'warning') : ''}${app.payment_status === 'reported' ? notice('입금 확인을 요청했습니다. 관리자가 실제 입금과 회원정보를 확인한 뒤 이용권을 반영합니다.') : ''}${app.application_status === 'refund_required' ? notice('환불 확인이 필요합니다. 실제 카드 취소·계좌 반환은 센터로 문의해 주세요.', 'warning') : ''}${payable && app.payment_method === 'card' ? notice(s.card_guide || '사전 신청이 완료되었습니다. 안내데스크에서 회원 이름 또는 접수번호를 말씀해 주세요. 카드결제 확인 후 재등록이 완료됩니다.') : ''}${payable && app.payment_method === 'transfer' ? s.bank_name && s.bank_account && s.bank_holder ? `<div class="member-bank"><p>${text(s.bank_name)} · 예금주 ${text(s.bank_holder)}</p><strong>${text(s.bank_account)}</strong><p>입금금액 <b>${money(app.amount)}</b></p><button class="member-secondary" type="button" data-copy-bank>계좌번호 복사</button>${s.transfer_guide ? `<p class="member-muted member-pre">${text(s.transfer_guide)}</p>` : ''}<form class="member-form" data-form="payment-report">${field('입금자명', 'payer_name', app.payer_name || '', 'required maxlength="60"')}${errorSlot}<button class="member-button" type="submit" data-requires-network>${app.payment_status === 'reported' ? '입금자명 수정·확인 재요청' : '입금했어요 — 확인 요청'}</button></form><p class="member-muted">관리자 확인 후 재등록이 완료됩니다.</p></div>` : notice('현재 입금 안내를 확인할 수 없습니다. 임의로 입금하지 말고 센터로 문의해 주세요.', 'warning') : ''}<details class="member-term"><summary>접수 당시 안내·동의 기록</summary>${rows(app.consents_snapshot).map(t => `<h4>${text(t.title)} · ${text(t.version)}</h4><div class="member-pre">${text(t.body)}</div>`).join('') || '<p class="member-muted">접수 당시 기록을 확인 중입니다.</p>'}</details></article>`;
+  return `<article class="member-card"><h2>${text(snapshot.name || '이용 신청')} ${text(snapshot.class_name || '')}</h2><div class="member-status-row">${badge(app.application_status)}${badge(app.payment_status)}${app.pass_status === 'applied' ? badge('applied') : ''}${app.reservation_status !== 'none' ? badge(app.reservation_status) : ''}</div><dl class="member-definition"><dt>신청 구분</dt><dd>${app.kind === 'new' ? '신규' : '재등록'}</dd><dt>접수 당시 금액</dt><dd><strong>${money(app.amount)}</strong></dd><dt>결제방식</dt><dd>${app.payment_method === 'transfer' ? '계좌이체' : app.payment_method === 'cash' ? '현장 현금결제' : '현장 카드결제'}</dd>${app.student_name ? `<dt>어린이 수강생</dt><dd>${text(app.student_name)}</dd>` : ''}${app.desired_start_date ? `<dt>희망 시작일</dt><dd>${date(app.desired_start_date)}</dd>` : ''}<dt>${app.final_start_date ? '최종 이용기간' : '이용기간'}</dt><dd>${app.final_start_date || app.proposed_start_date ? `${date(app.final_start_date || app.proposed_start_date)} ~ ${date(app.final_end_date || app.proposed_end_date)}` : '관리자 회원 확인 후 확정'}</dd>${app.reservation_expires_at && app.reservation_status === 'reserved' ? `<dt>결제기한</dt><dd>${when(app.reservation_expires_at)}</dd>` : ''}${app.pass_status === 'applied' ? `<dt>외부 출입프로그램</dt><dd>${app.external_status === 'done' ? '관리자 반영 완료' : '관리자 별도 반영 대기'}</dd>` : ''}</dl>${app.reservation_status === 'unassigned' ? notice('회원 확인과 GX 자리 배정을 기다리고 있습니다. 자리 배정 전에는 입금하지 마세요.', 'warning') : app.reservation_status === 'waitlisted' ? notice('현재 대기접수 상태입니다. 자리 배정 전에는 입금하지 마세요.', 'warning') : ''}${app.application_status === 'needs_review' ? notice('관리자가 신청 또는 결제 내용을 확인 중입니다. 센터 안내를 확인해 주세요.', 'warning') : ''}${app.payment_status === 'reported' ? notice('입금 확인을 요청했습니다. 관리자가 실제 입금과 회원정보를 확인한 뒤 이용권을 반영합니다.') : ''}${app.application_status === 'refund_required' ? notice('환불 확인이 필요합니다. 실제 카드 취소·계좌 반환은 센터로 문의해 주세요.', 'warning') : ''}${payable && app.payment_method === 'card' ? notice(s.card_guide || '사전 신청이 완료되었습니다. 안내데스크에서 회원 이름 또는 접수번호를 말씀해 주세요. 카드결제 확인 후 재등록이 완료됩니다.') : ''}${payable && app.payment_method === 'cash' ? notice('안내데스크에서 현금결제 후 관리자가 결제를 확인하면 이용권에 반영됩니다.') : ''}${payable && app.payment_method === 'transfer' ? s.bank_name && s.bank_account && s.bank_holder ? `<div class="member-bank"><p>${text(s.bank_name)} · 예금주 ${text(s.bank_holder)}</p><strong>${text(s.bank_account)}</strong><p>입금금액 <b>${money(app.amount)}</b></p><button class="member-secondary" type="button" data-copy-bank>계좌번호 복사</button>${s.transfer_guide ? `<p class="member-muted member-pre">${text(s.transfer_guide)}</p>` : ''}<form class="member-form" data-form="payment-report">${field('입금자명', 'payer_name', app.payer_name || '', 'required maxlength="60"')}${errorSlot}<button class="member-button" type="submit" data-requires-network>${app.payment_status === 'reported' ? '입금자명 수정·확인 재요청' : '입금했어요 — 확인 요청'}</button></form><p class="member-muted">관리자 확인 후 재등록이 완료됩니다.</p></div>` : notice('현재 입금 안내를 확인할 수 없습니다. 임의로 입금하지 말고 센터로 문의해 주세요.', 'warning') : ''}<details class="member-term"><summary>접수 당시 안내·동의 기록</summary>${rows(app.consents_snapshot).map(t => `<h4>${text(t.title)} · ${text(t.version)}</h4><div class="member-pre">${text(t.body)}</div>`).join('') || '<p class="member-muted">접수 당시 기록을 확인 중입니다.</p>'}</details></article>`;
 }
 function requestCard(req) {
   const category = rows(state.home.request_categories).find(v => v.id === req.category_id)?.name || '건의·요청';
@@ -212,7 +271,7 @@ function render() {
   if (!state.home) return;
   revokePhotos(); state.photoEpoch++;
   navigation();
-  ({ home: renderHome, renew: renderRenew, requests: renderRequests, my: renderMy })[route()]();
+  ({ home: renderHome, renew: renderRenew, fitness_golf: () => renderApplication('fitness_golf'), gx: () => renderApplication('gx'), requests: renderRequests, my: renderMy })[route()]();
   content.setAttribute('aria-busy','false'); connection(); loadPhotos();
   if (location.hash === '#memberBoard') document.getElementById('memberBoard')?.scrollIntoView({ block: 'start' });
 }
@@ -242,7 +301,7 @@ function initSignature() {
   ctx.scale(ratio,ratio); ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.strokeStyle = '#172b3a';
   let drawing = false;
   const point = event => { const box = canvas.getBoundingClientRect(); return [event.clientX-box.left,event.clientY-box.top]; };
-  canvas.onpointerdown = event => { if (state.busy) return; drawing = true; canvas.closest('form')._signatureChanged = true; canvas.setPointerCapture(event.pointerId); ctx.beginPath(); ctx.moveTo(...point(event)); };
+  canvas.onpointerdown = event => { if (state.busy || canvas.closest('fieldset')?.disabled) return; drawing = true; canvas.closest('form')._signatureChanged = true; canvas.setPointerCapture(event.pointerId); ctx.beginPath(); ctx.moveTo(...point(event)); };
   canvas.onpointermove = event => { if (drawing) { ctx.lineTo(...point(event)); ctx.stroke(); signatureDrawn = true; } };
   canvas.onpointerup = canvas.onpointercancel = () => { drawing = false; };
 }
@@ -250,11 +309,14 @@ function applicant(data) {
   return Object.fromEntries(['name','building','unit','phone'].map(key => [key,String(data.get(key) || '').trim()]));
 }
 async function ensureTicket(form, data, kind) {
-  if (!collectionOpen(kind)) throw new Error('현재 접수 준비 중입니다. 관리자 설정 완료 후 다시 시도해 주세요.');
-  if (form._ticket) return form._ticket;
-  const ticket = await guestService('prepare', { kind, phone: String(data.get('phone') || '').trim(), consents: data.getAll('consents'), honeypot: String(data.get('website') || '') });
+  const program = kind === 'application' ? applicationProgram(form) : 'common';
+  if (!collectionOpen(kind,program)) throw new Error('현재 접수 준비 중입니다. 관리자 설정 완료 후 다시 시도해 주세요.');
+  if (form._ticket && form._ticketProgram === program) return form._ticket;
+  if (form._ticket) { delete form._signaturePhoto; form._signatureChanged = true; delete form._photoSlots; }
+  const ticket = await guestService('prepare', { kind, ...(kind === 'application' ? {program} : {}), phone: String(data.get('phone') || '').trim(), consents: data.getAll('consents'), honeypot: String(data.get('website') || '') });
   if (!ticket.ticket_id || !ticket.receipt_no || !/^[a-f0-9]{64}$/i.test(ticket.receipt_key || '')) throw new Error('비공개 접수 확인정보를 받지 못했습니다. 아직 접수되지 않았습니다.');
   form._ticket = ticket;
+  form._ticketProgram = program;
   return ticket;
 }
 async function uploadGuestFile(file,ticket,purpose = 'photo',replaceId) {
@@ -273,8 +335,10 @@ function accepted(result,ticket) {
 async function submitApplication(form,data) {
   const {kind,item} = selectedItem(form);
   if (!item) throw new Error('이용권 또는 GX 반을 선택해 주세요.');
-  const wantsSignature = settings().signature_enabled && data.get('kind') === 'new';
-  if (wantsSignature && !signatureDrawn) throw new Error('신규 신청자 서명을 입력해 주세요.');
+  const program = applicationProgram(form);
+  const configuration = applicationForm(program);
+  const wantsSignature = signatureRequired(configuration, data.get('kind'));
+  if (wantsSignature && !signatureDrawn) throw new Error('신청자 서명을 입력해 주세요.');
   const epoch = state.epoch;
   const ticket = await ensureTicket(form,data,'application');
   if (wantsSignature && (!form._signaturePhoto || form._signatureChanged)) {
@@ -286,9 +350,9 @@ async function submitApplication(form,data) {
   }
   if (epoch !== state.epoch || !form.isConnected) return;
   const formValues = {};
-  rows(state.home.form?.fields).forEach(f => { const value = f.type === 'checkbox' ? data.has(`extra_${f.key}`) : (data.get(`extra_${f.key}`) || ''); if (value !== '' || f.required) formValues[f.key] = value; });
+  rows(configuration?.fields).forEach(f => { const value = f.type === 'checkbox' ? data.has(`extra_${f.key}`) : (data.get(`extra_${f.key}`) || ''); if (value !== '' || f.required) formValues[f.key] = value; });
   const profile = applicant(data);
-  const result = await guestService('submit_application', { ticket_id:ticket.ticket_id, receipt_key:ticket.receipt_key, profile, kind:data.get('kind'), ...(kind === 'gx' ? {gx_class_id:item.id} : {product_id:item.id}), expected_amount:item.price, expected_catalog_updated_at:item.updated_at, expected_form_id:state.home.form?.id, payment_method:data.get('payment_method'), payer_name:String(data.get('payer_name') || profile.name).trim(), desired_start_date:kind === 'gx' ? undefined : data.get('desired_start_date'), consents:data.getAll('consents'), form_values:formValues, signature_photo_id:wantsSignature ? form._signaturePhoto : undefined, student_name:data.get('student_name') || undefined, guardian_consent:data.has('guardian_consent') });
+  const result = await guestService('submit_application', { ticket_id:ticket.ticket_id, receipt_key:ticket.receipt_key, program, profile, kind:data.get('kind'), ...(kind === 'gx' ? {gx_class_id:item.id} : {product_id:item.id}), expected_amount:item.price, expected_catalog_updated_at:item.updated_at, expected_form_id:configuration?.id, payment_method:data.get('payment_method'), payer_name:String(data.get('payer_name') || profile.name).trim(), desired_start_date:kind === 'gx' ? undefined : data.get('desired_start_date'), consents:data.getAll('consents'), form_values:formValues, signature_photo_id:wantsSignature ? form._signaturePhoto : undefined, student_name:data.get('student_name') || undefined, guardian_consent:data.has('guardian_consent') });
   if (epoch !== state.epoch || !form.isConnected) return;
   accepted(result,ticket);
 }
@@ -401,7 +465,11 @@ document.addEventListener('change',event => {
   if (['selection','desired_start_date'].includes(event.target.name)) selectionChanged(form);
   if (event.target.name === 'kind') {
     const section = document.getElementById('memberSignatureSection');
-    if (section) { section.hidden = event.target.value !== 'new'; if (!section.hidden) initSignature(); }
+    if (section) {
+      const wasHidden = section.hidden;
+      section.hidden = !signatureRequired(applicationForm(applicationProgram(form)), event.target.value);
+      if (wasHidden && !section.hidden) initSignature();
+    }
   }
   if (event.target.name === 'payment_method') {
     const payer = document.getElementById('memberPayerField');

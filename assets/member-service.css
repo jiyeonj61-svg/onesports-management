@@ -90,6 +90,26 @@
 .member-reply { padding: 16px; border-left: 3px solid var(--brand); background: #f1f8f5; margin-top: 14px; border-radius: 0 10px 10px 0; }
 .member-signature { width: 100%; height: 156px; background: #fff; border: 1px solid var(--line-strong); border-radius: 10px; touch-action: none; display: block; }
 .member-form-fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+.member-application-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin-block: 24px; }
+.member-application-option { display: flex; flex-direction: column; align-items: flex-start; padding: 26px; border: 1px solid var(--line); border-radius: 18px; background: #fff; color: var(--text); }
+.member-application-option:hover { border-color: var(--brand); background: #f7fbf9; }
+.member-application-option h2 { margin-block: 12px; }
+.member-application-option p { color: var(--muted); font-size: 14px; line-height: 1.8; margin-block: 0 24px; }
+.member-application-link { margin-top: auto; color: var(--brand); font-weight: 750; }
+.member-document { margin-block: 20px; }
+.member-document summary { cursor: pointer; color: var(--brand-dark); min-height: 36px; }
+.member-document summary h2 { display: inline; font-size: 19px; }
+.member-document details[open] summary { margin-bottom: 16px; }
+.member-document h3 { font-size: 16px; margin-block: 20px 8px; }
+.member-document .member-pre { font-size: 14px; line-height: 1.85; }
+.member-table-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
+.member-price-table { width: 100%; border-collapse: collapse; font-size: 14px; text-align: left; }
+.member-price-table th, .member-price-table td { padding: 12px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.member-price-table thead { background: #f1f7f4; color: var(--brand-dark); }
+.member-price-table tbody th { font-weight: 600; }
+.member-price-table td:last-child, .member-price-table th:last-child { text-align: right; white-space: nowrap; }
+.member-price-table tr:last-child th, .member-price-table tr:last-child td { border-bottom: 0; }
+.member-price-table small { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; font-weight: 400; }
 .member-form-fieldset:disabled input, .member-form-fieldset:disabled select, .member-form-fieldset:disabled textarea { background: #f5f7f6; color: #76817c; cursor: not-allowed; }
 .member-honeypot { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }
 .member-receipt-key { display: block; padding: 14px; margin-block: 12px; border: 1px solid var(--line); border-radius: 9px; background: #f5f8f7; white-space: normal; overflow-wrap: anywhere; font-size: 15px; letter-spacing: .02em; }
@@ -122,6 +142,10 @@
   .member-actions { align-items: stretch; }
   .member-actions > * { min-width: 115px; }
   .member-two-columns { gap: 10px; }
+  .member-application-options { grid-template-columns: 1fr; gap: 12px; }
+  .member-application-option { padding: 22px; }
+  .member-price-table { font-size: 12px; }
+  .member-price-table th, .member-price-table td { padding: 10px 6px; }
 }
 @media (max-width: 360px) { .member-menu > span > span { display: none; } }
 @media (prefers-reduced-motion: reduce) { .member-page * { scroll-behavior: auto; transition: none; } }

@@ -5,6 +5,7 @@ create table if not exists public.ms_guest_submissions (
  id uuid primary key default gen_random_uuid(), receipt_no text not null unique,
  secret_hash bytea not null check(octet_length(secret_hash)=32), phone_hash bytea not null,
  kind text not null check(kind in ('application','request')),
+ program text check(program in ('common','fitness_golf','gx')),
  status text not null default 'draft' check(status in ('draft','received','needs_review','cancelled','converted','reviewing','in_progress','completed','needs_info','held','declined')),
  expires_at timestamptz not null default now()+interval '20 minutes',
  profile_snapshot jsonb, application_payload jsonb, request_payload jsonb,
@@ -80,7 +81,7 @@ begin
  select coalesce(jsonb_agg(jsonb_build_object('id',id,'mime',mime,'bytes',bytes,'purpose',purpose) order by created_at),'[]') into photos from public.ms_guest_photos where submission_id=r.id and (id=any(r.photo_ids||r.action_photo_ids) or (purpose='signature' and id::text=r.application_payload->>'signature_photo_id'));
  cfg:=cfg-array['privacy_purpose','privacy_items','privacy_retention'];
  if not bank_allowed then cfg:=cfg-array['bank_name','bank_account','bank_holder']; end if;
- return jsonb_build_object('ticket_id',r.id,'receipt_no',r.receipt_no,'kind',r.kind,'status',coalesce(app->>'application_status',r.status),'intake_status',r.status,'profile_snapshot',r.profile_snapshot,'application',app,'request',requestj,'photos',photos,'settings',cfg,'created_at',r.created_at,'submitted_at',r.submitted_at);
+ return jsonb_build_object('ticket_id',r.id,'receipt_no',r.receipt_no,'kind',r.kind,'program',coalesce(r.program,app->'form_snapshot'->>'program','common'),'status',coalesce(app->>'application_status',r.status),'intake_status',r.status,'profile_snapshot',r.profile_snapshot,'application',app,'request',requestj,'photos',photos,'settings',cfg,'created_at',r.created_at,'submitted_at',r.submitted_at);
 end $$;
 
 create or replace function public.guest_service(action text,payload jsonb default '{}'::jsonb) returns jsonb
@@ -89,15 +90,15 @@ declare
  adm boolean:=public.is_app_admin(); u uuid:=auth.uid(); s jsonb; r public.ms_guest_submissions%rowtype;
  p public.ms_products%rowtype; g public.ms_gx_classes%rowtype; a public.ms_applications%rowtype; m public.ms_profiles%rowtype; f public.ms_forms%rowtype;
  photo public.ms_guest_photos%rowtype; d jsonb; fieldj jsonb; outj jsonb; consentj jsonb; snap jsonb; beforej jsonb;
- ident uuid; ids uuid[]; secret text; phone text; v text; key text; op text; kindv text; reservev text;
+ programv text; ident uuid; ids uuid[]; secret text; phone text; v text; key text; op text; kindv text; reservev text;
  raw bytea; hashv bytea; countv integer; sizev integer; total_bytes bigint; pricev integer; childv boolean;
  startd date; endd date; prevstart date; prevend date; expires timestamptz;
 begin
  if action is null or action<>all(array['prepare','receipt','photo','upload_photo','submit_application','submit_request','payment_report','admin_list','admin_detail','admin_create_member','admin_match','admin_convert','admin_action','admin_update_request','admin_upload_photo']) or payload is null or jsonb_typeof(payload)<>'object' or length(payload::text)>800000 then return jsonb_build_object('ok',false,'error','요청 종류, 크기 또는 형식을 확인해 주세요.'); end if;
  select data into s from public.ms_settings where id=true for share;
  if action in ('prepare','upload_photo','submit_application','submit_request') then
-  perform pg_advisory_xact_lock(813012);
-  if coalesce(trim(s->>'privacy_purpose'),'')='' or coalesce(trim(s->>'privacy_items'),'')='' or coalesce(trim(s->>'privacy_retention'),'')='' or not exists(select 1 from public.ms_terms where active and approved and kind='privacy') then return jsonb_build_object('ok',false,'error','개인정보 안내 설정 확인 후 접수를 시작합니다.'); end if;
+  perform pg_advisory_xact_lock(813012); perform pg_advisory_xact_lock(813011);
+  if coalesce(trim(s->>'privacy_purpose'),'')='' or coalesce(trim(s->>'privacy_items'),'')='' or coalesce(trim(s->>'privacy_retention'),'')='' then return jsonb_build_object('ok',false,'error','개인정보 안내 설정 확인 후 접수를 시작합니다.'); end if;
  end if;
  if action like 'admin_%' and not adm then return jsonb_build_object('ok',false,'error','승인된 관리자 권한이 필요합니다.'); end if;
  if not adm then
@@ -109,9 +110,15 @@ begin
  if action='prepare' then
   kindv:=payload->>'kind';
   if kindv not in ('application','request') or kindv is null then raise exception '접수 종류를 확인해 주세요.'; end if;
+  programv:=case when kindv='request' then 'common' else coalesce(nullif(payload->>'program',''),'common') end;
+  if programv not in ('common','fitness_golf','gx') or (kindv='application' and programv='common' and exists(select 1 from public.ms_forms where program<>'common')) then raise exception '신청할 프로그램을 선택하고 접수를 다시 시작해 주세요.'; end if;
+  if kindv='application' then
+   select * into f from public.ms_form_for(programv); if f.id is null then raise exception '선택한 프로그램의 신청서 설정이 필요합니다.'; end if;
+   if not exists(select 1 from public.ms_terms where active and approved and kind='rules' and program=f.program) then raise exception '선택한 프로그램의 이용규정 확인 후 접수를 시작합니다.'; end if;
+  end if;
   if not coalesce((s->>(case when kindv='application' then 'applications_enabled' else 'requests_enabled' end))::boolean,false) then raise exception '관리자 운영 설정 확인 후 접수를 시작합니다.'; end if;
-  if coalesce(trim(s->>'privacy_purpose'),'')='' or coalesce(trim(s->>'privacy_items'),'')='' or coalesce(trim(s->>'privacy_retention'),'')='' or not exists(select 1 from public.ms_terms where active and approved and kind='privacy') then raise exception '개인정보 안내 설정 확인 후 접수를 시작합니다.'; end if;
-  if jsonb_typeof(coalesce(payload->'consents','[]'))<>'array' or exists(select 1 from public.ms_terms where active and approved and kind='privacy' and required and not(coalesce(payload->'consents','[]') ? id::text)) then raise exception '개인정보 안내를 읽고 동의해 주세요.'; end if;
+  if coalesce(trim(s->>'privacy_purpose'),'')='' or coalesce(trim(s->>'privacy_items'),'')='' or coalesce(trim(s->>'privacy_retention'),'')='' or not exists(select 1 from public.ms_terms_for(programv) where kind='privacy') then raise exception '개인정보 안내 설정 확인 후 접수를 시작합니다.'; end if;
+  if jsonb_typeof(coalesce(payload->'consents','[]'))<>'array' or exists(select 1 from public.ms_terms_for(programv) where kind='privacy' and required and not(coalesce(payload->'consents','[]') ? id::text)) then raise exception '개인정보 안내를 읽고 동의해 주세요.'; end if;
   phone:=regexp_replace(coalesce(payload->>'phone',''),'[^0-9]','','g');
   if phone !~ '^[0-9]{8,15}$' then raise exception '연락처를 확인해 주세요.'; end if;
   hashv:=digest(phone,'sha256');
@@ -120,9 +127,9 @@ begin
    return jsonb_build_object('ok',false,'error','접수 시도 한도를 초과했습니다. 잠시 후 다시 시도하거나 안내데스크에 문의해 주세요.');
   end if;
   secret:=encode(gen_random_bytes(32),'hex');
-  insert into public.ms_guest_submissions(receipt_no,secret_hash,phone_hash,kind)
-  values((case when kindv='application' then 'A-' else 'R-' end)||to_char(public.ms_kst_today(),'YYYYMMDD')||'-'||upper(substr(replace(gen_random_uuid()::text,'-',''),1,12)),digest(secret,'sha256'),hashv,kindv) returning * into r;
-  return jsonb_build_object('ok',true,'ticket_id',r.id,'receipt_no',r.receipt_no,'receipt_key',secret,'expires_at',r.expires_at);
+  insert into public.ms_guest_submissions(receipt_no,secret_hash,phone_hash,kind,program)
+  values((case when kindv='application' then 'A-' else 'R-' end)||to_char(public.ms_kst_today(),'YYYYMMDD')||'-'||upper(substr(replace(gen_random_uuid()::text,'-',''),1,12)),digest(secret,'sha256'),hashv,kindv,programv) returning * into r;
+  return jsonb_build_object('ok',true,'ticket_id',r.id,'receipt_no',r.receipt_no,'receipt_key',secret,'expires_at',r.expires_at,'program',r.program);
  end if;
 
  if action='admin_list' then
@@ -153,6 +160,12 @@ begin
   if not public.ms_guest_secret_matches(payload->>'receipt_key',r.secret_hash) then return jsonb_build_object('ok',false,'error','접수번호와 확인키를 확인해 주세요.'); end if;
  end if;
  if r.id is null then raise exception '접수를 찾을 수 없습니다.'; end if;
+ programv:=coalesce(r.program,'common');
+ if action in ('upload_photo','submit_application','submit_request') and r.status='draft' then
+  if r.kind='application' and programv='common' and exists(select 1 from public.ms_forms where program<>'common') then raise exception '프로그램별 신청서가 변경되었습니다. 접수를 다시 시작해 주세요.'; end if;
+  if not exists(select 1 from public.ms_terms_for(programv) where kind='privacy') then raise exception '선택한 접수의 개인정보 안내 확인 후 접수를 시작합니다.'; end if;
+  if r.kind='application' then select * into f from public.ms_form_for(programv); if f.id is null then raise exception '선택한 프로그램의 신청서 설정이 필요합니다.'; end if; end if;
+ end if;
 
  if action='receipt' then
   if r.status='draft' then raise exception '아직 최종 접수되지 않았습니다.'; end if;
@@ -169,8 +182,9 @@ begin
   kindv:=coalesce(payload->>'purpose',case when action='admin_upload_photo' then 'action' else 'photo' end);
   if action='upload_photo' then
    if r.status<>'draft' or r.expires_at<=now() then raise exception '접수 준비 시간이 지났습니다. 다시 작성해 주세요.'; end if;
-   if not coalesce((s->>(case when r.kind='application' then 'applications_enabled' else 'requests_enabled' end))::boolean,false) or not exists(select 1 from public.ms_terms where active and approved and kind='privacy') then raise exception '현재 사진 접수가 중단되어 있습니다.'; end if;
-   if not ((r.kind='request' and kindv='photo') or (r.kind='application' and kindv='signature' and (s->>'signature_enabled')::boolean)) then raise exception '허용되지 않은 사진 종류입니다.'; end if;
+   if not coalesce((s->>(case when r.kind='application' then 'applications_enabled' else 'requests_enabled' end))::boolean,false) or not exists(select 1 from public.ms_terms_for(programv) where kind='privacy') then raise exception '현재 사진 접수가 중단되어 있습니다.'; end if;
+   if r.kind='application' and not exists(select 1 from public.ms_terms where active and approved and kind='rules' and program=f.program) then raise exception '선택한 프로그램의 이용규정 확인 후 서명을 접수합니다.'; end if;
+   if not ((r.kind='request' and kindv='photo') or (r.kind='application' and kindv='signature' and f.signature_mode in ('new','always'))) then raise exception '허용되지 않은 사진 종류입니다.'; end if;
   elsif r.kind<>'request' or r.status='draft' or kindv<>'action' then raise exception '접수된 요청의 조치 사진만 등록할 수 있습니다.'; end if;
   if payload->>'mime' not in ('image/jpeg','image/png','image/webp') or payload->>'mime' is null then raise exception 'JPEG, PNG, WebP 이미지만 첨부할 수 있습니다.'; end if;
   raw:=decode(payload->>'base64','base64'); sizev:=octet_length(raw);
@@ -209,10 +223,16 @@ begin
   phone:=regexp_replace(d->>'phone','[^0-9]','','g');
   if digest(phone,'sha256')<>r.phone_hash then raise exception '연락처가 변경되었습니다. 접수를 다시 시작해 주세요.'; end if;
   d:=jsonb_build_object('name',trim(d->>'name'),'building',trim(d->>'building'),'unit',trim(d->>'unit'),'phone',trim(d->>'phone'));
-  if not exists(select 1 from public.ms_terms where active and approved and kind='privacy') then raise exception '개인정보 안내 설정 확인 후 접수를 시작합니다.'; end if;
+  if r.kind='application' then
+   if ((nullif(payload->>'product_id','') is null)=(nullif(payload->>'gx_class_id','') is null)) then raise exception '이용권 또는 GX 반 하나를 선택해 주세요.'; end if;
+   v:=case when nullif(payload->>'gx_class_id','') is not null then 'gx' else 'fitness_golf' end;
+   if programv<>'common' and programv<>v then raise exception '신청 프로그램이 변경되었습니다. 접수를 다시 시작해 주세요.'; end if;
+   programv:=v; select * into f from public.ms_form_for(programv);
+  end if;
+  if not exists(select 1 from public.ms_terms_for(programv) where kind='privacy') then raise exception '개인정보 안내 설정 확인 후 접수를 시작합니다.'; end if;
   childv:=exists(select 1 from public.ms_gx_classes where id=nullif(payload->>'gx_class_id','')::uuid and is_child);
-  if jsonb_typeof(coalesce(payload->'consents','[]'))<>'array' or exists(select 1 from public.ms_terms where active and approved and required and (kind='privacy' or (r.kind='application' and (kind<>'guardian' or childv))) and not (coalesce(payload->'consents','[]') ? id::text)) then raise exception '최신 필수 안내를 확인하고 동의해 주세요.'; end if;
-  select coalesce(jsonb_agg(to_jsonb(t)-'created_by'||jsonb_build_object('agreed_at',now(),'receipt_no',r.receipt_no)),'[]') into consentj from public.ms_terms t where active and approved and (kind='privacy' or (r.kind='application' and (kind<>'guardian' or childv))) and (coalesce(payload->'consents','[]') ? t.id::text);
+  if jsonb_typeof(coalesce(payload->'consents','[]'))<>'array' or exists(select 1 from public.ms_terms_for(programv) where required and (kind='privacy' or (r.kind='application' and (kind<>'guardian' or childv))) and not (coalesce(payload->'consents','[]') ? id::text)) then raise exception '최신 필수 안내를 확인하고 동의해 주세요.'; end if;
+  select coalesce(jsonb_agg(to_jsonb(t)-'created_by'||jsonb_build_object('agreed_at',now(),'receipt_no',r.receipt_no)),'[]') into consentj from public.ms_terms_for(programv) t where (kind='privacy' or (r.kind='application' and (kind<>'guardian' or childv))) and (coalesce(payload->'consents','[]') ? t.id::text);
   if r.kind='request' then
    if not exists(select 1 from public.ms_categories where id=(payload->>'category_id')::uuid and kind='request' and active) then raise exception '건의 분류를 확인해 주세요.'; end if;
    if coalesce(length(trim(payload->>'title')),0) not between 1 and 160 or coalesce(length(trim(payload->>'body')),0) not between 1 and 10000 or length(coalesce(payload->>'location',''))>300 or length(coalesce(payload->>'item_name',''))>150 then raise exception '제목과 내용을 확인해 주세요.'; end if;
@@ -223,10 +243,9 @@ begin
    update public.ms_guest_submissions set profile_snapshot=d,request_payload=snap,consents_snapshot=consentj,photo_ids=ids,status='received',submitted_at=now(),updated_at=now() where id=r.id returning * into r;
   else
    if payload->>'kind' not in ('new','renewal') or payload->>'kind' is null then raise exception '신규 또는 재등록을 선택해 주세요.'; end if;
-   if payload->>'payment_method' not in ('card','transfer') or payload->>'payment_method' is null then raise exception '결제방식을 선택해 주세요.'; end if;
+   if payload->>'payment_method' not in ('cash','card','transfer') or payload->>'payment_method' is null then raise exception '결제방식을 선택해 주세요.'; end if;
    if payload->>'payment_method'='transfer' and (coalesce(trim(s->>'bank_name'),'')='' or coalesce(trim(s->>'bank_account'),'')='' or coalesce(trim(s->>'bank_holder'),'')='') then raise exception '입금계좌 설정 전에는 계좌이체 신청을 할 수 없습니다.'; end if;
-   if not exists(select 1 from public.ms_terms where active and approved and kind='rules') then raise exception '이용규정 확인 후 접수를 시작합니다.'; end if;
-   select * into f from public.ms_forms where active;
+   if not exists(select 1 from public.ms_terms where active and approved and kind='rules' and program=f.program) then raise exception '선택한 프로그램의 이용규정 확인 후 접수를 시작합니다.'; end if;
    if f.id is null or nullif(payload->>'expected_form_id','')::uuid is distinct from f.id then raise exception '신청서가 변경되었습니다. 내용을 다시 확인해 주세요.'; end if;
    if jsonb_typeof(coalesce(payload->'form_values','{}'))<>'object' or length(coalesce(payload->'form_values','{}')::text)>20000 then raise exception '추가 입력 항목을 확인해 주세요.'; end if;
    for fieldj in select value from jsonb_array_elements(f.fields) loop
@@ -248,9 +267,10 @@ begin
    end if;
    if nullif(payload->>'expected_amount','')::integer is distinct from pricev or nullif(payload->>'expected_catalog_updated_at','')::timestamptz is distinct from (snap->>'updated_at')::timestamptz then raise exception '금액 또는 이용기간이 변경되었습니다. 다시 확인해 주세요.'; end if;
    if nullif(payload->>'desired_start_date','')::date>public.ms_kst_today()+366 then raise exception '희망 시작일을 확인해 주세요.'; end if;
-   if (s->>'signature_enabled')::boolean and payload->>'kind'='new' and nullif(payload->>'signature_photo_id','') is null then raise exception '서명이 필요합니다.'; end if;
+   if (f.signature_mode='always' or (f.signature_mode='new' and payload->>'kind'='new')) and nullif(payload->>'signature_photo_id','') is null then raise exception '선택한 신청서에는 서명이 필요합니다.'; end if;
+   if f.signature_mode='none' and nullif(payload->>'signature_photo_id','') is not null then raise exception '이 신청서는 서명을 수집하지 않습니다.'; end if;
    if nullif(payload->>'signature_photo_id','') is not null and not exists(select 1 from public.ms_guest_photos where id=(payload->>'signature_photo_id')::uuid and submission_id=r.id and purpose='signature') then raise exception '서명을 확인해 주세요.'; end if;
-   outj:=jsonb_build_object('kind',payload->>'kind','product_id',p.id,'gx_class_id',g.id,'product_snapshot',snap,'amount',pricev,'payment_method',payload->>'payment_method','payer_name',left(coalesce(payload->>'payer_name',d->>'name'),80),'desired_start_date',nullif(payload->>'desired_start_date','')::date,'proposed_start_date',startd,'proposed_end_date',endd,'application_status','received','payment_status','awaiting','pass_status','pending','external_status','pending','reservation_status',reservev,'consents_snapshot',consentj,'form_snapshot',to_jsonb(f)-'created_by','form_values',coalesce(payload->'form_values','{}'),'signature_photo_id',nullif(payload->>'signature_photo_id','')::uuid,'student_name',left(payload->>'student_name',80),'guardian_consent',coalesce((payload->>'guardian_consent')::boolean,false));
+   outj:=jsonb_build_object('program',programv,'kind',payload->>'kind','product_id',p.id,'gx_class_id',g.id,'product_snapshot',snap,'amount',pricev,'payment_method',payload->>'payment_method','payer_name',left(coalesce(payload->>'payer_name',d->>'name'),80),'desired_start_date',nullif(payload->>'desired_start_date','')::date,'proposed_start_date',startd,'proposed_end_date',endd,'application_status','received','payment_status','awaiting','pass_status','pending','external_status','pending','reservation_status',reservev,'consents_snapshot',consentj,'form_snapshot',to_jsonb(f)-'created_by','form_values',coalesce(payload->'form_values','{}'),'signature_photo_id',nullif(payload->>'signature_photo_id','')::uuid,'student_name',left(payload->>'student_name',80),'guardian_consent',coalesce((payload->>'guardian_consent')::boolean,false));
    update public.ms_guest_submissions set profile_snapshot=d,application_payload=outj,product_snapshot=snap,amount=pricev,consents_snapshot=consentj,status='received',submitted_at=now(),updated_at=now() where id=r.id returning * into r;
   end if;
   insert into public.ms_audit(entity,entity_id,action,after_data,actor_id) values('guest_'||r.kind,r.id,'submitted',jsonb_build_object('receipt_no',r.receipt_no),null);
