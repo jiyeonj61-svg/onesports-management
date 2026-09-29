@@ -184,16 +184,22 @@ test('profile administration does not offer member account invitations or unlink
   assert.match(root.innerHTML, /현장 확인/);
 });
 
-test('cash payment waits are distinct from card and transfer and exclude cancelled applications', () => {
-  const { state, filterRows, statusGrid } = harness();
+test('historical cash records remain accurate without a cash option in current admin filters', () => {
+  const { state, filterRows, statusGrid, renderApplications } = harness();
   const rows = ['cash', 'card', 'transfer'].map(payment_method => ({ payment_method, payment_status: 'awaiting', application_status: 'pending' }));
   rows.push({ payment_method: 'cash', payment_status: 'awaiting', application_status: 'cancelled' });
   state.filters.applications = { status: 'cash_pending' };
   assert.deepEqual(plain(filterRows('applications', rows)).map(row => row.payment_method), ['cash']);
-  assert.match(statusGrid(rows[0]), /현장 현금결제 대기/);
+  assert.match(statusGrid(rows[0]), /현금 확인 대기 \(기존 기록\)/);
   assert.doesNotMatch(statusGrid(rows[0]), /카드결제/);
   state.filters.applications = { status: 'card_pending' };
   assert.deepEqual(plain(filterRows('applications', rows)).map(row => row.payment_method), ['card']);
+  state.filters.applications = {};
+  state.lists.applications = [{ id: 'legacy-cash', ...rows[0], amount: 30000 }];
+  state.lists.guest_applications = [];
+  const root = { innerHTML: '' }; renderApplications(root);
+  assert.match(root.innerHTML, /현금 \(기존 기록\)/);
+  assert.doesNotMatch(root.innerHTML, /<option value="cash_pending"|현장 현금결제/);
 });
 
 test('program-specific forms remain separate and an inactive GX form does not fall back to common', () => {

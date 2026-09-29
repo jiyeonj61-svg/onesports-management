@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { APPLICATION_DOCUMENTS } from '../assets/application-documents.js';
 
 const original = readFileSync(new URL('../assets/members.js', import.meta.url),'utf8');
-const source = original.replace(/^import[^\n]+\n/gm,'').replace(/boot\(\);\s*$/,'globalThis.inspect={state,route,renderHome,renderRenew,renderApplication,applicationForm,applicationDocument,signatureRequired,renderRequests,renderMy,collectionOpen,applicationCard,requestCard,selectionChanged,addDays,ensureTicket,submitApplication,submitRequest,lookupReceipt,receiptText};');
+const source = original.replace(/^import[^\n]+\n/gm,'').replace(/boot\(\);\s*$/,'globalThis.inspect={state,route,renderHome,renderRenew,renderApplication,applicationForm,applicationDocument,applicationConsents,hasApplicationConsents,connection,signatureRequired,renderRequests,renderMy,collectionOpen,applicationCard,requestCard,selectionChanged,addDays,ensureTicket,submitApplication,submitRequest,lookupReceipt,receiptText};');
 function harness() {
   const nodes = new Map();
   const node = () => ({innerHTML:'',textContent:'',hidden:false,setAttribute(){},removeAttribute(){},querySelectorAll(){return []},scrollIntoView(){}});
@@ -26,7 +26,7 @@ function harness() {
   const api=box.inspect;api.state.home=home;
   return {api,box,home,nodes,handlers,urls};
 }
-const formData = values => ({get:key=>values[key]??'',getAll:key=>key==='consents'?['privacy','rules']:[],has:key=>!!values[key]});
+const formData = values => ({get:key=>values[key]??'',getAll:key=>key==='consents'?(values.consents??['privacy','rules']):[],has:key=>!!values[key]});
 const secret = 'a'.repeat(64);
 
 test('member public entry has no account or Auth call and keeps the requested board title',()=>{
@@ -133,14 +133,14 @@ test('renewal menu links two separate application routes and preserves the pause
   }
 });
 
-test('program forms expose only their catalog and custom fields, including cash',()=>{
+test('program forms expose only their catalog and custom fields, without cash',()=>{
   const {api,home,nodes}=harness();
   home.gx_classes=[{id:'gx1',name:'TEST GX',class_name:'A',status:'open',registration_start:'2020-01-01',registration_end:'2099-01-01',weekdays:[2,4],start_time:'09:00',price:40000}];
   home.forms=[{id:'fitness-form',program:'fitness_golf',title:'센터 헬스 신청서',signature_mode:'none',fields:[{key:'fitness_only',type:'text',label:'FITNESS FIELD'}]},{id:'gx-form',program:'gx',title:'센터 GX 신청서',signature_mode:'none',fields:[{key:'gx_only',type:'text',label:'GX FIELD'}]}];
   api.renderRenew();assert.match(nodes.get('memberContent').innerHTML,/<h2>센터 헬스 신청서<\/h2>/);assert.match(nodes.get('memberContent').innerHTML,/<h2>센터 GX 신청서<\/h2>/);
   api.renderApplication('fitness_golf');let html=nodes.get('memberContent').innerHTML;
   assert.match(html,/<h1>센터 헬스 신청서<\/h1>/);assert.match(html,/value="product:p"/);assert.doesNotMatch(html,/value="gx:gx1"|name="extra_gx_only"/);assert.match(html,/name="extra_fitness_only"/);
-  assert.match(html,/name="payment_method" value="card" checked/);assert.match(html,/name="payment_method" value="cash"/);assert.match(html,/name="payment_method" value="transfer"/);
+  assert.match(html,/name="payment_method" value="card" checked/);assert.doesNotMatch(html,/name="payment_method" value="cash"|현장 현금결제/);assert.match(html,/name="payment_method" value="transfer"/);
   api.renderApplication('gx');html=nodes.get('memberContent').innerHTML;
   assert.match(html,/<h1>센터 GX 신청서<\/h1>/);assert.match(html,/value="gx:gx1"/);assert.doesNotMatch(html,/value="product:p"|name="extra_fitness_only"/);assert.match(html,/name="extra_gx_only"/);assert.match(html,/화·목/);
   assert.match(html,/id="memberDesiredDate" hidden/);
@@ -168,16 +168,20 @@ test('application consent scopes and request privacy do not leak across programs
   assert.match(html,/value="privacy"/);assert.doesNotMatch(html,/value="gx-privacy"|value="fitness_golf-privacy"|value="rules"/);
 });
 
-test('reference prices and rules stay readable outside disabled inputs and yield to live values',()=>{
+test('reference prices stay readable and draft agreements appear inside disabled application forms',()=>{
   const {api,home,nodes}=harness();home.settings.applications_enabled=false;home.products=[];home.terms=[];
   api.renderApplication('fitness_golf');const html=nodes.get('memberContent').innerHTML;
   const readOnly=html.slice(0,html.indexOf('<form class="member-form"'));
-  assert.match(readOnly,/신청서 기준 요금표/);assert.match(readOnly,/515,000원/);assert.match(readOnly,/양도규정/);assert.match(readOnly,/개인정보 안내 \(설정 중\)/);assert.doesNotMatch(readOnly,/<input/);
+  assert.match(readOnly,/신청서 기준 요금표/);assert.match(readOnly,/515,000원/);assert.doesNotMatch(readOnly,/양도규정|data-consent-kind|<input/);
+  const application=html.slice(html.indexOf('<form class="member-form"'));
+  assert.match(application,/양도규정/);assert.match(application,/data-consent-kind="rules"/);assert.match(application,/data-consent-kind="privacy"/);
+  assert.match(application,/<input type="checkbox" data-draft-consent="rules" disabled/);assert.match(application,/<input type="checkbox" data-draft-consent="privacy" disabled/);
+  assert.doesNotMatch(application,/name="consents"|type="checkbox"[^>]*checked/);
   assert.match(html,/<fieldset class="member-form-fieldset" disabled>/);assert.doesNotMatch(html,/이 신청서의 상품·운영기간과 안내·동의 설정을 확인하고/);
   assert.doesNotMatch(api.applicationDocument('gx'),/515,000원/);assert.match(api.applicationDocument('gx'),/B \(초등반\)/);
   home.products=[{id:'live',name:'CURRENT PRICE',duration_days:30,price:123456}];home.forms=[{id:'fitness-form',program:'fitness_golf'}];
   home.terms=[{id:'live-rules',program:'fitness_golf',kind:'rules',title:'CURRENT RULES',body:'LATEST RULE BODY',active:true,approved:true},{id:'live-privacy',kind:'privacy',active:true,approved:true}];
-  const updated=api.applicationDocument('fitness_golf');assert.match(updated,/123,456원/);assert.match(updated,/LATEST RULE BODY/);assert.doesNotMatch(updated,/신청서 기준 요금표|515,000원|양도규정|보유기간을 확정/);
+  const updated=api.applicationDocument('fitness_golf')+api.applicationConsents('fitness_golf');assert.match(updated,/123,456원/);assert.match(updated,/LATEST RULE BODY/);assert.doesNotMatch(updated,/신청서 기준 요금표|515,000원|양도규정|보유기간을 확정|data-draft-consent/);
 });
 
 test('signature modes govern both rendering and submission before prepare',async()=>{
@@ -188,7 +192,7 @@ test('signature modes govern both rendering and submission before prepare',async
   home.form.signature_mode='always';api.renderApplication('fitness_golf');assert.match(nodes.get('memberContent').innerHTML,/id="memberSignatureSection" >/);
   let calls=0;box.guestService=async()=>{calls++;return {}};
   const form={dataset:{program:'fitness_golf'},elements:{selection:{value:'product:p'}}};
-  await assert.rejects(api.submitApplication(form,formData({kind:'renewal'})),/신청자 서명/);assert.equal(calls,0);
+  await assert.rejects(api.submitApplication(form,formData({kind:'renewal',payment_method:'card'})),/신청자 서명/);assert.equal(calls,0);
 });
 
 test('ticket program is explicit and switching programs creates a fresh private ticket',async()=>{
@@ -200,20 +204,55 @@ test('ticket program is explicit and switching programs creates a fresh private 
   assert.equal(calls.length,2);assert.equal(calls[1].payload.program,'gx');assert.notEqual(first.ticket_id,second.ticket_id);assert.equal(form._signaturePhoto,undefined);
 });
 
-test('application submit sends matching form snapshot, program and cash payment',async()=>{
+test('application submit sends matching form snapshot, program and card payment',async()=>{
   const {api,home,box}=harness();const calls=[];
   home.forms.push({id:'fitness-form',program:'fitness_golf',signature_mode:'none',fields:[{key:'purpose',type:'text',required:true}]});
   home.terms.push({id:'fitness-rules',program:'fitness_golf',kind:'rules',active:true,approved:true});
   box.guestService=async(action,payload)=>{calls.push({action,payload});return action==='prepare'?{ticket_id:'ticket',receipt_no:'A-TEST',receipt_key:secret}:{receipt:{receipt_no:'A-TEST',kind:'application',status:'received',photos:[]}}};
   const form={isConnected:true,dataset:{program:'fitness_golf'},elements:{selection:{value:'product:p'}}};
-  await api.submitApplication(form,formData({kind:'renewal',phone:'TEST',payment_method:'cash',extra_purpose:'TEST PURPOSE',desired_start_date:'2026-10-01'}));
+  await api.submitApplication(form,formData({kind:'renewal',phone:'TEST',payment_method:'card',consents:['privacy','rules','fitness-rules'],extra_purpose:'TEST PURPOSE',desired_start_date:'2026-10-01'}));
   const sent=calls.find(call=>call.action==='submit_application').payload;
-  assert.equal(sent.program,'fitness_golf');assert.equal(sent.expected_form_id,'fitness-form');assert.equal(sent.form_values.purpose,'TEST PURPOSE');assert.equal(sent.payment_method,'cash');assert.equal(sent.product_id,'p');assert.equal(sent.gx_class_id,undefined);
+  assert.equal(sent.program,'fitness_golf');assert.equal(sent.expected_form_id,'fitness-form');assert.equal(sent.form_values.purpose,'TEST PURPOSE');assert.equal(sent.payment_method,'card');assert.equal(sent.product_id,'p');assert.equal(sent.gx_class_id,undefined);
   await assert.rejects(api.submitApplication({dataset:{program:'gx'},elements:{selection:{value:'product:p'}}},formData({kind:'new'})),/이용권 또는 GX 반을 선택/);
 });
 
 test('cash receipt does not offer transfer reporting or use a card-only instruction',()=>{
   const {api}=harness();api.state.receipt={settings:{bank_name:'TEST BANK',bank_account:'SECRET ACCOUNT',bank_holder:'TEST'}};
   const html=api.applicationCard({product_snapshot:{name:'TEST'},amount:30000,payment_method:'cash',application_status:'received',payment_status:'awaiting',pass_status:'pending',reservation_status:'none'});
-  assert.match(html,/현장 현금결제/);assert.match(html,/관리자가 결제를 확인/);assert.doesNotMatch(html,/SECRET ACCOUNT|data-form="payment-report"|카드결제 확인 후/);
+  assert.match(html,/현금 \(기존 기록\)/);assert.doesNotMatch(html,/현장 현금결제|현금결제 후|SECRET ACCOUNT|data-form="payment-report"|카드결제 확인 후/);
+});
+
+test('both consent groups are unchecked mandatory controls even when database required flags are false',()=>{
+  const {api,home}=harness();home.terms.forEach(term=>{term.required=false});
+  const html=api.applicationConsents('fitness_golf');
+  assert.match(html,/data-consent-kind="rules"/);assert.match(html,/data-consent-kind="privacy"/);
+  assert.match(html,/name="consents" value="rules" required/);assert.match(html,/name="consents" value="privacy" required/);
+  assert.doesNotMatch(html,/type="checkbox"[^>]*checked/);
+  for(const ids of [[],['privacy'],['rules'],['privacy','unrelated-rules']])assert.equal(api.hasApplicationConsents(ids,'fitness_golf'),false);
+  assert.equal(api.hasApplicationConsents(['privacy','rules'],'fitness_golf'),true);
+  home.terms.push({id:'fitness-rules',program:'fitness_golf',kind:'rules',required:false,approved:true,active:true});
+  assert.equal(api.hasApplicationConsents(['privacy','rules'],'fitness_golf'),false);
+  assert.equal(api.hasApplicationConsents(['privacy','rules','fitness-rules'],'fitness_golf'),true);
+  assert.equal(api.hasApplicationConsents(['privacy','rules'],'gx'),true);
+});
+
+test('application button stays disabled until both consent groups are checked and disables again when unchecked',()=>{
+  const {api,box}=harness();
+  const inputs=[{value:'privacy',checked:false},{value:'rules',checked:false}];
+  const form={dataset:{program:'fitness_golf'},querySelectorAll:()=>inputs};
+  const button={dataset:{unavailable:'false'},hasAttribute:()=>true,closest:()=>form};
+  box.document.querySelectorAll=()=>[button];
+  api.connection();assert.equal(button.disabled,true);
+  inputs[0].checked=true;api.connection();assert.equal(button.disabled,true);
+  inputs[1].checked=true;api.connection();assert.equal(button.disabled,false);
+  inputs[0].checked=false;api.connection();assert.equal(button.disabled,true);
+  inputs[0].checked=true;box.navigator.onLine=false;api.connection();assert.equal(button.disabled,true);
+});
+
+test('missing consent or a forged cash selection is rejected before transmitting personal data',async()=>{
+  const {api,box}=harness();let calls=0;box.guestService=async()=>{calls++;return {}};
+  const form={dataset:{program:'fitness_golf'},elements:{selection:{value:'product:p'}}};
+  for(const ids of [[],['privacy'],['rules']])await assert.rejects(api.ensureTicket(form,formData({phone:'TEST',consents:ids}),'application'),/이용규정과 개인정보 안내를 모두/);
+  await assert.rejects(api.submitApplication(form,formData({kind:'renewal',payment_method:'cash',consents:['privacy','rules']})),/카드결제 또는 계좌이체/);
+  assert.equal(calls,0);
 });

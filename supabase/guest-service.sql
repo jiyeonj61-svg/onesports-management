@@ -118,7 +118,7 @@ begin
   end if;
   if not coalesce((s->>(case when kindv='application' then 'applications_enabled' else 'requests_enabled' end))::boolean,false) then raise exception '관리자 운영 설정 확인 후 접수를 시작합니다.'; end if;
   if coalesce(trim(s->>'privacy_purpose'),'')='' or coalesce(trim(s->>'privacy_items'),'')='' or coalesce(trim(s->>'privacy_retention'),'')='' or not exists(select 1 from public.ms_terms_for(programv) where kind='privacy') then raise exception '개인정보 안내 설정 확인 후 접수를 시작합니다.'; end if;
-  if jsonb_typeof(coalesce(payload->'consents','[]'))<>'array' or exists(select 1 from public.ms_terms_for(programv) where kind='privacy' and required and not(coalesce(payload->'consents','[]') ? id::text)) then raise exception '개인정보 안내를 읽고 동의해 주세요.'; end if;
+  if jsonb_typeof(coalesce(payload->'consents','[]'))<>'array' or exists(select 1 from public.ms_terms_for(programv) where kind='privacy' and (required or kindv='application') and not(coalesce(payload->'consents','[]') ? id::text)) then raise exception '개인정보 안내를 읽고 동의해 주세요.'; end if;
   phone:=regexp_replace(coalesce(payload->>'phone',''),'[^0-9]','','g');
   if phone !~ '^[0-9]{8,15}$' then raise exception '연락처를 확인해 주세요.'; end if;
   hashv:=digest(phone,'sha256');
@@ -231,7 +231,7 @@ begin
   end if;
   if not exists(select 1 from public.ms_terms_for(programv) where kind='privacy') then raise exception '개인정보 안내 설정 확인 후 접수를 시작합니다.'; end if;
   childv:=exists(select 1 from public.ms_gx_classes where id=nullif(payload->>'gx_class_id','')::uuid and is_child);
-  if jsonb_typeof(coalesce(payload->'consents','[]'))<>'array' or exists(select 1 from public.ms_terms_for(programv) where required and (kind='privacy' or (r.kind='application' and (kind<>'guardian' or childv))) and not (coalesce(payload->'consents','[]') ? id::text)) then raise exception '최신 필수 안내를 확인하고 동의해 주세요.'; end if;
+  if jsonb_typeof(coalesce(payload->'consents','[]'))<>'array' or exists(select 1 from public.ms_terms_for(programv) where (required or (r.kind='application' and kind in ('privacy','rules'))) and (kind='privacy' or (r.kind='application' and (kind<>'guardian' or childv))) and not (coalesce(payload->'consents','[]') ? id::text)) then raise exception '이용규정과 개인정보 안내를 각각 확인하고 필수 항목에 동의해 주세요.'; end if;
   select coalesce(jsonb_agg(to_jsonb(t)-'created_by'||jsonb_build_object('agreed_at',now(),'receipt_no',r.receipt_no)),'[]') into consentj from public.ms_terms_for(programv) t where (kind='privacy' or (r.kind='application' and (kind<>'guardian' or childv))) and (coalesce(payload->'consents','[]') ? t.id::text);
   if r.kind='request' then
    if not exists(select 1 from public.ms_categories where id=(payload->>'category_id')::uuid and kind='request' and active) then raise exception '건의 분류를 확인해 주세요.'; end if;
@@ -243,7 +243,7 @@ begin
    update public.ms_guest_submissions set profile_snapshot=d,request_payload=snap,consents_snapshot=consentj,photo_ids=ids,status='received',submitted_at=now(),updated_at=now() where id=r.id returning * into r;
   else
    if payload->>'kind' not in ('new','renewal') or payload->>'kind' is null then raise exception '신규 또는 재등록을 선택해 주세요.'; end if;
-   if payload->>'payment_method' not in ('cash','card','transfer') or payload->>'payment_method' is null then raise exception '결제방식을 선택해 주세요.'; end if;
+   if payload->>'payment_method' not in ('card','transfer') or payload->>'payment_method' is null then raise exception '카드 또는 계좌이체를 선택해 주세요.'; end if;
    if payload->>'payment_method'='transfer' and (coalesce(trim(s->>'bank_name'),'')='' or coalesce(trim(s->>'bank_account'),'')='' or coalesce(trim(s->>'bank_holder'),'')='') then raise exception '입금계좌 설정 전에는 계좌이체 신청을 할 수 없습니다.'; end if;
    if not exists(select 1 from public.ms_terms where active and approved and kind='rules' and program=f.program) then raise exception '선택한 프로그램의 이용규정 확인 후 접수를 시작합니다.'; end if;
    if f.id is null or nullif(payload->>'expected_form_id','')::uuid is distinct from f.id then raise exception '신청서가 변경되었습니다. 내용을 다시 확인해 주세요.'; end if;

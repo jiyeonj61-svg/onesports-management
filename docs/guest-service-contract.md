@@ -2,7 +2,7 @@
 
 기존 `member_service`와 관리자 승인 규칙은 유지합니다. 회원용 새 화면은 Auth 로그인·가입·초대 없이 `guest_service`를 사용합니다. 공개 공지·상품·약관·신청서 설정은 기존 `member_service('public_home', {})`를 그대로 읽습니다.
 
-프로그램별 양식·약관·서명 및 현금 처리의 최신 세부 계약은 [프로그램별 신청서 계약](program-forms-contract.md)을 따릅니다.
+프로그램별 양식·약관·서명 및 결제 처리의 최신 세부 계약은 [프로그램별 신청서 계약](program-forms-contract.md)을 따릅니다. 신규 신청 결제수단은 카드·계좌이체이며, 과거 현금 기록은 조회와 기존 처리 흐름을 유지합니다.
 
 `supabase.rpc('guest_service', {action, payload})` 응답은 `{ok:true,...}` 또는 `{ok:false,error}`입니다. HTTP 오류와 `ok:false`를 모두 실패로 처리합니다. 실패·오프라인에서 접수 완료를 표시하지 않습니다. 인증키·개인정보를 URL, QR, localStorage, 분석로그에 넣지 않습니다.
 
@@ -16,6 +16,8 @@
 ### prepare
 
 입력: `{kind:'application'|'request',program:'fitness_golf'|'gx',phone,consents:[termId],honeypot:''}`. 신청은 프로그램을 고정하며 건의는 항상 `common`입니다.
+
+`application` 준비는 적용되는 모든 개인정보 안내 ID에 동의해야 합니다. 관리자 `required=false` 설정으로 이 조건을 해제할 수 없습니다. 건의는 기존 약관의 `required` 설정을 따릅니다.
 
 출력: `{ticket_id,receipt_no,receipt_key,expires_at,program}`. 확인키는 DB에서 생성한 256비트 무작위 64자리 소문자 hex이며 해시만 저장합니다. 응답을 잃으면 새 준비 요청이 필요하지만 최종 제출은 같은 ticket으로 재시도하면 중복 생성되지 않습니다. 준비 유효시간은 20분입니다.
 
@@ -42,7 +44,7 @@
   kind: 'new' | 'renewal',
   product_id, // product_id 또는 gx_class_id 중 하나
   gx_class_id,
-  payment_method: 'cash' | 'card' | 'transfer',
+  payment_method: 'card' | 'transfer',
   payer_name, desired_start_date,
   consents: [termId], form_values: {},
   signature_photo_id, student_name, guardian_consent,
@@ -51,6 +53,8 @@
 ```
 
 출력: `{receipt,duplicate?}`. 금액·일수·규정·신청서 버전은 서버에서 읽고 화면에 표시했던 expected 값과 다르면 거절합니다. 신청 당시 상품·규정 원문·폼을 보존하며 이후 카탈로그 변경으로 덮어쓰지 않습니다. 제출자가 보낸 승인상태·금액·회원 ID는 사용하지 않습니다.
+
+최종 신청은 적용되는 모든 `privacy`와 `rules` 약관의 개별 ID 동의를 요구합니다. 두 종류 모두 `required=false`여도 필수이며, 누락 시 접수되지 않습니다. 어린이 GX 보호자 약관 등 나머지 조건은 기존 규칙을 따릅니다. 신규 `cash` 제출은 거절합니다. 이미 접수된 현금 기록의 조회·중복 재시도·관리자 후속 처리는 당시 스냅샷을 그대로 사용합니다.
 
 재등록 화면은 기존 회원정보나 기존 이용권을 조회하지 않습니다. 최종 기간은 직원의 현장 확인과 실제 결제 확인 후 기존 이용권을 고려하여 확정합니다.
 

@@ -57,6 +57,14 @@
 .member-term details { margin-top: 8px; margin-left: 28px; font-size: 13px; }
 .member-term summary { cursor: pointer; color: var(--brand); }
 .member-term .member-pre { max-height: 230px; overflow-y: auto; margin-top: 12px; }
+.member-consent-group { display: grid; gap: 10px; }
+.member-consent-group h3 { margin: 4px 0 0; font-size: 16px; }
+.member-consent details { margin-left: 0; }
+.member-consent .member-check { font-weight: 600; }
+.member-consent input:disabled { cursor: not-allowed; }
+.member-consent-draft { max-height: 300px; overflow-y: auto; padding-right: 6px; }
+.member-consent-draft .member-pre { max-height: none; overflow: visible; }
+.member-consent-draft h4 { margin: 16px 0 6px; }
 .member-button, .member-secondary, .member-text-button { min-height: 46px; border: 0; border-radius: 10px; padding: 11px 17px; font-weight: 750; text-align: center; line-height: 1.5; display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
 .member-button { background: var(--brand); color: #fff; }
 .member-secondary { background: #edf3f1; color: var(--brand-dark); }
