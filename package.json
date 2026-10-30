@@ -5,6 +5,7 @@
   "scripts": {
     "test": "node --test --experimental-test-isolation=none tests/*.test.mjs",
     "test:db": "node tests/database.mjs",
+    "test:integration": "node tests/integration-operations.mjs",
     "dev": "node scripts/dev.mjs"
   },
   "devDependencies": {
