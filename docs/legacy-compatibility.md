@@ -60,4 +60,5 @@ Vercel 관리앱의 환경별 변수는 `integration.env.example`을 따릅니�
 - `npm test`: 기존 47개와 새 호환 테스트 9개, 총 56개 통과.
 - `node tests/integration-operations.mjs`: 실제 격리 PostgreSQL 보안/CRUD/매핑 테스트 19개 통과.
 - 신규 검사: 원래 공개 정책의 개별 증거 없이는 공개 매핑 거절, 사진 개수만 공개, 기존 수정자·시각 보존, expected_updated_at의 stale edit 40001 거절, status 필터, 부분 업로드 재시도, 로그아웃 중 사진 요청 무효화, 고정 단지 프록시/출처/환경 분리.
+- 실제 Chrome headless 로컬 검사 통과: 합성 데이터/API 응답으로 `/admin`의 단지별 읽기·점검 수정, 회원서비스 메뉴 유지, 인증 사진 Blob 표시, 공개 `#today`, 390px 모바일 가로 넘침 없음. 운영 API와 운영 데이터를 사용하지 않은 화면 호환 검사이며 외부 통합 검증과 구분합니다.
 - 원격 배포·마이그레이션·실제 record 매핑은 주 에이전트가 배포 결과에서 별도로 보고합니다. 이 문서의 로컬 통과 결과만으로 운영 반영을 주장하지 않습니다.
