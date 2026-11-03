@@ -898,6 +898,11 @@ async function bootstrap() {
     const banner=$('#setupBanner');banner.classList.remove('hidden');
     banner.textContent='이 단지의 관리 기록은 통합 시스템과 연결되어 있습니다. 기존 관리자 권한은 이 단지에만 적용됩니다.';
     const link=document.createElement('a');link.href=state.connection.integration.hqUrl;link.textContent=' 본사 통합 화면';link.className='viewer-return';banner.append(link);
+    for(const id of ['inspectionPhotos','issuePhotos','headOfficeCheckPhotos','inventoryPhotos']){
+      const note=document.createElement('small');note.className='field-help';
+      note.textContent='새로 첨부하는 사진은 업무 권한이 있는 로그인 사용자만 볼 수 있습니다. 기록을 공개해도 새 사진은 열람 화면에 표시되지 않습니다.';
+      $('#'+id).closest('label').append(note);
+    }
   }
   document.documentElement.dataset.appReady = 'true';
   const authorized = await authorizeCurrentSession();
