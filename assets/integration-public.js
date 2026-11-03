@@ -22,7 +22,7 @@ export function createPublicIntegrationAdapter(config, fetcher = fetch) {
       for (;;) {
         const query = new URLSearchParams({ resource, limit: '200', offset: String(offset) });
         for (const key of ['start','end','search','status']) if (filters[key]) query.set(key,String(filters[key]));
-        const response = await fetcher(`${PREFIX}?${query}`, { cache:'no-store', credentials:'omit', redirect:'error' });
+        const response = await fetcher(`${PREFIX}?${query}`, { cache:'no-store', credentials:'omit', redirect:'error', signal:AbortSignal.timeout(25000) });
         const body = await response.json().catch(() => null);
         if (!response.ok || !body || body.ok !== true || !Array.isArray(body.items) || !Number.isSafeInteger(body.total) || body.total < 0) {
           throw new Error(response.status === 404 ? '이 단지의 공개 열람이 현재 제공되지 않습니다.' : '관리현황을 불러오지 못했습니다. 잠시 후 새로고침해 주세요.');
@@ -34,6 +34,9 @@ export function createPublicIntegrationAdapter(config, fetcher = fetch) {
           const count = Number(row.legacy_photo_count || 0);
           if (!Number.isSafeInteger(count) || count < 0 || count > 100) throw new Error('사진 연결 정보를 확인하지 못했습니다.');
           const photo_paths = Array.from({ length: count }, (_, index) => `${PREFIX}?${new URLSearchParams({ resource, recordId:String(row.id), photoIndex:String(index) })}`);
+          const files=row.photo_file_ids===undefined?[]:row.photo_file_ids;
+          if(!Array.isArray(files)||files.some(id=>typeof id!=='string'||!/^[a-f0-9]{64}$/.test(id))||new Set(files).size!==files.length)throw new Error('사진 연결 정보를 확인하지 못했습니다.');
+          for(const fileId of files)photo_paths.push(`${PREFIX}?${new URLSearchParams({resource,recordId:String(row.id),fileId})}`);
           collected.push({ ...row, photo_paths });
         }
         offset += body.items.length;
@@ -46,8 +49,9 @@ export function createPublicIntegrationAdapter(config, fetcher = fetch) {
     photoUrl(value) {
       if (typeof value !== 'string' || !value.startsWith(`${PREFIX}?`)) return '';
       const url = new URL(value,'https://local.invalid');
-      const allowed = ['resource','recordId','photoIndex'];
-      if ([...url.searchParams.keys()].some(key=>!allowed.includes(key)) || !RESOURCES.has(url.searchParams.get('resource')) || !UUID.test(url.searchParams.get('recordId') || '') || !/^\d{1,2}$/.test(url.searchParams.get('photoIndex') || '')) return '';
+      const allowed = ['resource','recordId','photoIndex','fileId'];
+      const legacy=url.searchParams.has('photoIndex'),file=url.searchParams.has('fileId');
+      if ([...url.searchParams.keys()].some(key=>!allowed.includes(key)||url.searchParams.getAll(key).length!==1) || !RESOURCES.has(url.searchParams.get('resource')) || url.searchParams.get('resource')==='areas' || !UUID.test(url.searchParams.get('recordId') || '') || legacy===file || (legacy&&!/^\d{1,2}$/.test(url.searchParams.get('photoIndex')||'')) || (file&&!/^[a-f0-9]{64}$/.test(url.searchParams.get('fileId')||''))) return '';
       return url.pathname + url.search;
     },
   };

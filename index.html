@@ -65,7 +65,7 @@
       <div>
         <p class="eyebrow">FITNESS CENTER MANAGEMENT</p>
         <h1 id="pageTitle">휘트니스센터 관리현황</h1>
-        <p>공간별 오전·오후 점검, 조치·민원, 본사점검 및 시설비품 현황을 실시간으로 확인할 수 있습니다.</p>
+        <p>공간별 오전·오후 점검, 조치·민원, 본사점검 및 시설비품의 공개 현황을 자동 갱신으로 확인할 수 있습니다.</p>
 
       </div>
       <div class="hero-date">
@@ -74,6 +74,10 @@
       </div>
     </section>
 
+    <div id="viewerRefreshStatus" class="viewer-refresh" role="status" aria-live="polite">
+      <span id="viewerRefreshText">공개 기록 확인 중</span>
+      <button id="refreshNow" class="text-button" type="button">지금 새로고침</button>
+    </div>
     <nav class="section-tabs desktop-tabs" aria-label="관리현황 메뉴">
       <button class="tab-button active" data-tab="today" type="button"><span>오늘 관리</span></button>
       <button class="tab-button" data-tab="calendar" type="button"><span>캘린더</span></button>

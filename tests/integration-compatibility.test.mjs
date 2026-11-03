@@ -41,6 +41,37 @@ test('public API errors, incomplete pages and changing totals never become norma
  await assert.rejects(createPublicIntegrationAdapter(config,async()=>json({ok:true,total:2,items:[]})).list('issues'));
  let count=0;await assert.rejects(createPublicIntegrationAdapter(config,async()=>json({ok:true,total:++count===1?2:3,items:[{id:ROW}]})).list('issues'),/변경/);
 });
+
+test('public image IDs become fixed record-scoped URLs and malformed image references are rejected',async()=>{
+ const file='a'.repeat(64),adapter=createPublicIntegrationAdapter(config,async()=>json({ok:true,total:1,items:[{id:ROW,legacy_photo_count:1,photo_file_ids:[file]}]}));
+ const [row]=await adapter.list('issues');assert.equal(row.photo_paths.length,2);
+ assert.equal(adapter.photoUrl(row.photo_paths[1]),`/api/integration-public?resource=issues&recordId=${ROW}&fileId=${file}`);
+ for(const suffix of ['&photoIndex=0','&fileId='+file,'&siteId='+SITE,'&url=https://attacker.test'])assert.equal(adapter.photoUrl(row.photo_paths[1]+suffix),'');
+ for(const ids of [['../private'],[file,file],null])await assert.rejects(createPublicIntegrationAdapter(config,async()=>json({ok:true,total:1,items:[{id:ROW,photo_file_ids:ids}]})).list('issues'),/사진/);
+});
+
+test('public file relay pins site and parent while excluding PDFs, mixed selectors and injected paths',async()=>{
+ const file='b'.repeat(64),calls=[],env={VERCEL_ENV:'production',LEGACY_INTEGRATION_ENABLED:'true',LEGACY_SITE_ID:SITE,API_ORIGIN_PRODUCTION:'https://production.example.test'};
+ const handler=await proxy('api/integration-public.js',env,async(url,options)=>{calls.push({url:String(url),options});return new Response(new Uint8Array([255,216,255]),{headers:{'Content-Type':'image/jpeg'}});});
+ const base=`/api/integration-public?resource=issues&recordId=${ROW}&fileId=${file}`;
+ const result=await invoke(handler,base,{headers:{cookie:'never-forward',authorization:'Bearer never-forward'}});
+ assert.equal(result.statusCode,200);assert.equal(calls[0].url,`https://production.example.test/api/integration/public/sites/${SITE}/issues/${ROW}/files/${file}`);
+ assert.equal(result.headers['cdn-cache-control'],'no-store');assert.equal(result.headers['vercel-cdn-cache-control'],'no-store');
+ assert.equal(calls[0].options.headers.cookie,undefined);assert.equal(calls[0].options.headers.Authorization,undefined);
+ for(const suffix of ['&photoIndex=0','&fileId='+file,'&recordId='+ROW,'&siteId='+SITE,'&upstream=https://attacker.test'])assert.equal((await invoke(handler,base+suffix)).statusCode,400);
+ assert.equal((await invoke(handler,base.replace(file,'../private'))).statusCode,400);
+ assert.equal((await invoke(handler,base.replace('resource=issues','resource=areas'))).statusCode,400);assert.equal(calls.length,1);
+ const pdf=await proxy('api/integration-public.js',env,async()=>new Response('pdf',{headers:{'Content-Type':'application/pdf'}}));
+ assert.equal((await invoke(pdf,base)).statusCode,502);
+});
+test('public record with more than one hundred R2 images keeps every valid image reference',async()=>{
+ const files=Array.from({length:101},(_,index)=>index.toString(16).padStart(64,'0'));
+ const adapter=createPublicIntegrationAdapter(config,async()=>json({ok:true,total:1,items:[{id:ROW,legacy_photo_count:1,photo_file_ids:files}]}));
+ const [row]=await adapter.list('issues');assert.equal(row.photo_paths.length,102);
+ assert.ok(row.photo_paths.every(value=>adapter.photoUrl(value)===value));
+ assert.equal(new URL(row.photo_paths.at(-1),'https://local.test').searchParams.get('fileId'),files.at(-1));
+ await assert.rejects(createPublicIntegrationAdapter(config,async()=>json({ok:true,total:1,items:[{id:ROW,legacy_photo_count:101}]})).list('issues'),/사진/);
+});
 test('public relay pins configured site, isolates staging and never forwards caller credentials',async()=>{
  const calls=[];const env={VERCEL_ENV:'production',LEGACY_INTEGRATION_ENABLED:'true',LEGACY_SITE_ID:SITE,API_ORIGIN_PRODUCTION:'https://production.example.test',API_ORIGIN_STAGING:'https://staging.example.test'};
  const handler=await proxy('api/integration-public.js',env,async(url,options)=>{calls.push({url:String(url),options});return json({ok:true,total:0,items:[]});});

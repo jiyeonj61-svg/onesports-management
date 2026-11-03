@@ -148,6 +148,9 @@ img { display: block; max-width: 100%; }
 .admin-link:hover, .primary-button:hover { transform: translateY(-1px); }
 
 .main-content { padding: 26px 0 58px; }
+.viewer-refresh { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:12px 0; color:var(--muted); font-size:12px; }
+.viewer-refresh button { flex-shrink:0; padding:8px; color:var(--navy); background:transparent; }
+.viewer-refresh[data-status="error"], .viewer-refresh[data-status="offline"] { color:var(--danger); }
 .hero-panel {
   display: flex;
   align-items: flex-end;

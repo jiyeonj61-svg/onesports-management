@@ -1,4 +1,5 @@
 import { data } from './data.js';
+import {createLiveRefresh,loadViewerSnapshot,viewerSelectionKey} from './viewer-refresh.js';
 import {
   APP_START_DATE,
   APP_START_MONTH,
@@ -9,7 +10,6 @@ import {
   clampAppDate,
   clampAppMonth,
   completionPercent,
-  debounce,
   escapeHtml,
   formatDateTime,
   formatKoreanDate,
@@ -38,6 +38,7 @@ import {
 const state = {
   areas: [],
   selectedDate: appCurrentDate(),
+  dailyDate: appCurrentDate(),
   calendarMonth: monthKey(appCurrentDate()),
   reportMonth: monthKey(appCurrentDate()),
   dailyInspections: [],
@@ -48,10 +49,18 @@ const state = {
   allHeadOfficeChecks: [],
   issueFilter: 'open',
   activeTab: 'today',
+  lastToday: appCurrentDate(),
+  detail: null,
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
+let liveRefresh=null;
+const renderedSnapshots=new Map();
+function requestRefresh(){return liveRefresh?.request();}
+function loadDaily(){return requestRefresh();}
+function loadCalendar(){return requestRefresh();}
+function loadMonthlyReport(){return requestRefresh();}
 
 function areaById(id) {
   return state.areas.find((area) => Number(area.id) === Number(id));
@@ -153,7 +162,8 @@ function renderInspectionMatrix() {
   });
 }
 
-function showInspectionDetail(areaId, period, inspectionId) {
+function showInspectionDetail(areaId, period, inspectionId, open = true) {
+  state.detail={areaId,period};
   const area = areaById(areaId);
   const inspection = state.dailyInspections.find((item) => item.id === inspectionId);
   const meta = statusMeta(inspection?.status);
@@ -165,7 +175,7 @@ function showInspectionDetail(areaId, period, inspectionId) {
     <div class="modal-heading">
       <p class="section-kicker">${escapeHtml(PERIOD_META[period].full)}</p>
       <h2 id="detailModalTitle">${escapeHtml(area?.name || '공간')} 관리현황</h2>
-      <p>${escapeHtml(formatKoreanDate(state.selectedDate))}</p>
+      <p>${escapeHtml(formatKoreanDate(state.dailyDate))}</p>
     </div>
     <div class="detail-status ${meta.className}">
       <span class="status-symbol">${meta.icon}</span>
@@ -190,7 +200,7 @@ function showInspectionDetail(areaId, period, inspectionId) {
       <div><span>최종 입력시간</span><strong>${inspection ? escapeHtml(formatDateTime(inspection.updated_at)) : '-'}</strong></div>
     </div>
   `;
-  openModal($('#detailModal'));
+  if(open)openModal($('#detailModal'));
 }
 
 function compactItemHtml(issue) {
@@ -226,23 +236,16 @@ function renderTodayActivities() {
   $('#todayHeadOfficeChecks').innerHTML = headOfficeChecks.length ? headOfficeChecks.map(compactHeadOfficeCheckHtml).join('') : '등록된 본사점검이 없습니다.';
 }
 
-async function loadDaily() {
+function renderDaily(snapshot) {
+  state.dailyDate=snapshot.selection.selectedDate;
   updateSelectedDateLabels();
-  try {
-    const [inspections, issues, headOfficeChecks] = await Promise.all([
-      data.getInspections({ start: state.selectedDate, end: state.selectedDate }),
-      data.getIssues({ start: state.selectedDate, end: state.selectedDate }),
-      data.getHeadOfficeChecks({ start: state.selectedDate, end: state.selectedDate }).catch((error) => { console.error(error); return []; }),
-    ]);
-    state.dailyInspections = inspections;
-    state.dailyIssues = issues.filter((item) => item.is_public !== false);
-    state.dailyHeadOfficeChecks = headOfficeChecks;
-    renderDailySummary();
-    renderInspectionMatrix();
-    renderTodayActivities();
-  } catch (error) {
-    console.error(error);
-    $('#inspectionMatrix').innerHTML = `<div class="empty-state">관리현황을 불러오지 못했습니다.<br>${escapeHtml(error.message || '')}</div>`;
+  state.dailyInspections=snapshot.inspections;
+  state.dailyIssues=snapshot.issues.filter(item=>item.received_date===state.selectedDate);
+  state.dailyHeadOfficeChecks=snapshot.headOfficeChecks;
+  renderDailySummary();renderInspectionMatrix();renderTodayActivities();
+  if(state.detail&&$('#detailModal').classList.contains('open')){
+    const row=state.dailyInspections.find(item=>String(item.area_id)===String(state.detail.areaId)&&item.period===state.detail.period);
+    showInspectionDetail(state.detail.areaId,state.detail.period,row?.id,false);
   }
 }
 
@@ -344,35 +347,6 @@ function applyIssueFilter(items, filter) {
   return items;
 }
 
-async function loadAllIssues() {
-  try {
-    const issues = await data.getIssues({ start: APP_START_DATE, end: appCurrentDate() });
-    state.allIssues = issues.filter((item) => item.is_public !== false);
-    const openCount = state.allIssues.filter(isOpenIssue).length;
-    const issueBadge = $('#issueTabCount');
-    issueBadge.textContent = openCount;
-    issueBadge.classList.toggle('hidden', !openCount);
-  } catch (error) {
-    console.error(error);
-  }
-}
-
-async function loadAllInventories() {
-  try {
-    const inventories = await data.getInventories({ start: APP_START_DATE, end: appCurrentDate() });
-    state.allInventories = inventories.filter((item) => item.is_public !== false);
-  } catch (error) {
-    console.error(error);
-  }
-}
-
-async function loadAllHeadOfficeChecks() {
-  try {
-    state.allHeadOfficeChecks = await data.getHeadOfficeChecks({ start: APP_START_DATE, end: appCurrentDate() });
-  } catch (error) {
-    console.error(error);
-  }
-}
 
 function renderIssueList(filter, targetId = 'issuesList') {
   const filtered = applyIssueFilter(state.allIssues, filter);
@@ -397,19 +371,14 @@ function renderInventoryList() {
   target.innerHTML = state.allInventories.length ? state.allInventories.map((item) => inventoryCardHtml(item)).join('') : '공개된 시설·비품 현황이 없습니다.';
 }
 
-async function loadCalendar() {
-  state.calendarMonth = clampAppMonth(state.calendarMonth);
-  const month = state.calendarMonth;
-  const { start: monthStart, end: monthEnd, days } = monthRange(month);
+function renderCalendar(inspections, month) {
+  const { start: monthStart, days } = monthRange(month);
   const maximum = appCurrentDate();
   const currentMonth = monthKey(maximum);
-  const queryStart = monthStart < APP_START_DATE ? APP_START_DATE : monthStart;
-  const queryEnd = monthEnd > maximum ? maximum : monthEnd;
   $('#calendarMonthLabel').textContent = formatMonth(month);
   $('#prevMonth').disabled = month <= APP_START_MONTH;
   $('#nextMonth').disabled = month >= currentMonth;
-  try {
-    const inspections = queryEnd < queryStart ? [] : await data.getInspections({ start: queryStart, end: queryEnd });
+
     const byDate = new Map();
     inspections.forEach((item) => {
       if (!byDate.has(item.inspection_date)) byDate.set(item.inspection_date, []);
@@ -451,13 +420,9 @@ async function loadCalendar() {
     $$('[data-calendar-date]').forEach((button) => button.addEventListener('click', () => {
       state.selectedDate = clampAppDate(button.dataset.calendarDate);
       showTab('today');
-      loadDaily();
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }));
-  } catch (error) {
-    console.error(error);
-    $('#calendarGrid').innerHTML = `<div class="empty-state" style="grid-column:1/-1">캘린더를 불러오지 못했습니다.</div>`;
-  }
+
 }
 
 function elapsedDaysForMonth(month) {
@@ -469,9 +434,8 @@ function elapsedDaysForMonth(month) {
   return Math.floor(milliseconds / 86400000) + 1;
 }
 
-async function loadMonthlyReport() {
-  state.reportMonth = clampAppMonth(state.reportMonth);
-  const month = state.reportMonth;
+function renderMonthlyReport(snapshot, month) {
+  const {inspections,inventories,headOfficeChecks}=snapshot;
   const { start: monthStart, end: monthEnd } = monthRange(month);
   const maximum = appCurrentDate();
   const currentMonth = monthKey(maximum);
@@ -480,16 +444,9 @@ async function loadMonthlyReport() {
   $('#reportMonthLabel').textContent = formatMonth(month);
   $('#reportPrevMonth').disabled = month <= APP_START_MONTH;
   $('#reportNextMonth').disabled = month >= currentMonth;
-  try {
-    const [inspections, issues, inventories, headOfficeChecks] = end < start ? [[], [], [], []] : await Promise.all([
-      data.getInspections({ start, end }),
-      data.getIssues({ start, end }),
-      data.getInventories({ start, end }),
-      data.getHeadOfficeChecks({ start, end }),
-    ]);
-    const publicIssues = issues.filter((item) => item.is_public !== false);
+    const publicIssues = snapshot.issues.filter(item=>item.received_date>=start&&item.received_date<=end);
     const publicInventories = inventories.filter((item) => item.is_public !== false);
-    const elapsedDays = elapsedDaysForMonth(state.reportMonth);
+    const elapsedDays = elapsedDaysForMonth(month);
     const possible = elapsedDays * state.areas.length * 2;
     const rate = completionPercent(inspections.length, possible);
     const normal = inspections.filter((item) => item.status === 'normal' || item.status === 'completed').length;
@@ -527,9 +484,6 @@ async function loadMonthlyReport() {
     $('#monthlyActivityList').innerHTML = activity.length
       ? activity.map((entry) => entry.kind === 'head-office' ? compactHeadOfficeCheckHtml(entry.item) : compactItemHtml(entry.item)).join('')
       : '해당 월에 등록된 관리 기록이 없습니다.';
-  } catch (error) {
-    console.error(error);
-  }
 }
 
 function showTab(tab) {
@@ -541,11 +495,7 @@ function showTab(tab) {
   });
   $$('[data-tab]').forEach((button) => button.classList.toggle('active', button.dataset.tab === tab));
   history.replaceState(null, '', `#${tab}`);
-  if (tab === 'calendar') loadCalendar();
-  if (tab === 'issues') renderIssueList(state.issueFilter);
-  if (tab === 'head-office') renderHeadOfficeCheckList();
-  if (tab === 'inventory') renderInventoryList();
-  if (tab === 'report') loadMonthlyReport();
+  requestRefresh();
 }
 
 function bindEvents() {
@@ -610,13 +560,53 @@ function bindEvents() {
   document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeModal($('#detailModal')); });
 }
 
+function currentSelection(){
+  const today=appCurrentDate();
+  if(today!==state.lastToday){
+    if(state.selectedDate===state.lastToday)state.selectedDate=today;
+    if(state.calendarMonth===monthKey(state.lastToday))state.calendarMonth=monthKey(today);
+    if(state.reportMonth===monthKey(state.lastToday))state.reportMonth=monthKey(today);
+    state.lastToday=today;updateHeaderDate();
+  }
+  return {activeTab:state.activeTab,selectedDate:state.selectedDate,calendarMonth:state.calendarMonth,reportMonth:state.reportMonth,today};
+}
+
 async function refreshVisibleData() {
-  await Promise.all([loadAllIssues(), loadAllInventories(), loadAllHeadOfficeChecks(), loadDaily()]);
-  if (state.activeTab === 'calendar') await loadCalendar();
-  if (state.activeTab === 'issues') renderIssueList(state.issueFilter);
-  if (state.activeTab === 'head-office') renderHeadOfficeCheckList();
-  if (state.activeTab === 'inventory') renderInventoryList();
-  if (state.activeTab === 'report') await loadMonthlyReport();
+  const selection=currentSelection(),snapshot=await loadViewerSnapshot(data,selection);
+  if(viewerSelectionKey(selection)!==viewerSelectionKey(currentSelection()))return false;
+  state.areas=snapshot.areas;state.allIssues=snapshot.issues;
+  const badge=$('#issueTabCount'),openCount=snapshot.issues.filter(isOpenIssue).length;
+  badge.textContent=openCount;badge.classList.toggle('hidden',!openCount);
+  const signature=JSON.stringify(snapshot);
+  if(renderedSnapshots.get(selection.activeTab)!==signature){
+    const focused=document.activeElement?.dataset;
+    switch(selection.activeTab){
+      case 'today':renderDaily(snapshot);break;
+      case 'calendar':renderCalendar(snapshot.inspections,selection.calendarMonth);break;
+      case 'report':renderMonthlyReport(snapshot,selection.reportMonth);break;
+      case 'issues':renderIssueList(state.issueFilter);break;
+      case 'inventory':state.allInventories=snapshot.inventories;renderInventoryList();break;
+      case 'head-office':state.allHeadOfficeChecks=snapshot.headOfficeChecks;renderHeadOfficeCheckList();break;
+    }
+    renderedSnapshots.set(selection.activeTab,signature);
+    if(focused?.areaId&&focused.period&&!$('#detailModal').classList.contains('open')){
+      $$('.inspection-cell').find(node=>node.dataset.areaId===focused.areaId&&node.dataset.period===focused.period)?.focus({preventScroll:true});
+    }
+  }
+  return true;
+}
+
+function renderFreshness({status,lastSuccess,error}){
+  const labels={loading:'새 기록 확인 중',fresh:'5초마다 자동 확인',paused:'화면으로 돌아오면 갱신',offline:'오프라인 · 연결 복구 후 갱신',error:'갱신 지연 · 자동 재시도 중'};
+  const text=labels[status]||labels.loading;
+  const timestamp=lastSuccess?new Intl.DateTimeFormat('ko-KR',{timeZone:'Asia/Seoul',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date(lastSuccess)):'';
+  const indicator=$('#liveIndicator');indicator.className='live-indicator '+(['error','offline'].includes(status)?'error':status==='fresh'?'connected':'');
+  indicator.querySelector('span').textContent=text;indicator.title=timestamp?'마지막 확인 '+timestamp:text;
+  const statusNode=$('#viewerRefreshStatus');statusNode.dataset.status=status;
+  $('#viewerRefreshText').textContent=text+(timestamp?' · 마지막 확인 '+timestamp:'');
+  statusNode.title=error?.message||'';
+  $('#refreshNow').disabled=status==='loading'||status==='offline';
+  $$('.app-view').forEach(view=>view.setAttribute('aria-busy',String(status==='loading'&&view.dataset.view===state.activeTab)));
 }
 
 async function bootstrap() {
@@ -632,36 +622,18 @@ async function bootstrap() {
   }else{
     loginLink.textContent='관리자';loginLink.setAttribute('aria-label','관리자 로그인');
   }
-  state.areas = await data.getAreas();
-  await Promise.all([loadDaily(), loadAllIssues(), loadAllInventories(), loadAllHeadOfficeChecks()]);
 
   const requestedTab = location.hash.slice(1);
   const normalizedTab = ['complaints', 'actions'].includes(requestedTab) ? 'issues' : requestedTab;
   const initialTab = ['today', 'calendar', 'issues', 'head-office', 'inventory', 'report'].includes(normalizedTab) ? normalizedTab : 'today';
   showTab(initialTab);
 
-  const live = $('#liveIndicator');
-  const debouncedRefresh = debounce(refreshVisibleData, 180);
-  document.documentElement.dataset.appReady = 'true';
-  data.subscribe((event) => {
-    if (event.table === 'connection') {
-      if (event.status === 'SUBSCRIBED') {
-        live.className = 'live-indicator connected';
-        live.querySelector('span').textContent = '실시간 연결됨';
-      } else if (event.status === 'POLLING') {
-        live.className = 'live-indicator connected';
-        live.querySelector('span').textContent = '30초 자동 새로고침';
-      } else if (event.status === 'DEMO') {
-        live.className = 'live-indicator demo';
-        live.querySelector('span').textContent = '데모 모드';
-      } else if (event.status === 'CHANNEL_ERROR' || event.status === 'TIMED_OUT') {
-        live.className = 'live-indicator error';
-        live.querySelector('span').textContent = '연결 재시도 중';
-      }
-      return;
-    }
-    debouncedRefresh();
-  });
+  liveRefresh=createLiveRefresh({refresh:refreshVisibleData,onState:renderFreshness});
+  $('#refreshNow').addEventListener('click',requestRefresh);
+  document.documentElement.dataset.appReady='true';
+  await liveRefresh.start();
+  if(!connection.integration?.enabled)data.subscribe(event=>{if(event.table!=='connection')requestRefresh();});
+
 }
 
 bootstrap().catch((error) => {

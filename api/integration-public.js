@@ -12,6 +12,9 @@ function origin(value) {
 // cookies, caller-controlled site scope, role headers or arbitrary upstream URLs.
 module.exports=async function handler(req,res) {
   res.setHeader('Cache-Control','private, no-store, max-age=0');
+  res.setHeader('CDN-Cache-Control','no-store');
+  res.setHeader('Vercel-CDN-Cache-Control','no-store');
+  res.setHeader('Pragma','no-cache');
   res.setHeader('X-Content-Type-Options','nosniff');
   if(!['GET','HEAD'].includes(req.method)) { res.setHeader('Allow','GET, HEAD'); return reply(res,405,'읽기 전용 주소입니다.'); }
   let target;
@@ -24,15 +27,16 @@ module.exports=async function handler(req,res) {
     if(other && origin(other).origin===target.origin) throw new Error('environment separation');
   } catch { return reply(res,503,'기존 단지의 통합 연결 설정을 확인해 주세요.'); }
   const query=new URL(req.url || '/', 'https://local.invalid').searchParams;
-  const allowed=['resource','start','end','search','status','limit','offset','recordId','photoIndex'];
+  const allowed=['resource','start','end','search','status','limit','offset','recordId','photoIndex','fileId'];
   if([...query.keys()].some(key=>!allowed.includes(key) || query.getAll(key).length!==1)) return reply(res,400,'조회 조건을 확인해 주세요.');
   const resource=query.get('resource');
   if(!RESOURCES.has(resource)) return reply(res,400,'관리 기능을 확인해 주세요.');
-  const photo=query.has('recordId') || query.has('photoIndex');
+  const photo=query.has('recordId') || query.has('photoIndex') || query.has('fileId');
   target.pathname=`/api/integration/public/sites/${process.env.LEGACY_SITE_ID}/${resource}`;
   if(photo) {
-    if(resource==='areas' || !UUID.test(query.get('recordId')||'') || !/^\d{1,2}$/.test(query.get('photoIndex')||'') || [...query.keys()].some(key=>!['resource','recordId','photoIndex'].includes(key))) return reply(res,400,'사진 정보를 확인해 주세요.');
-    target.pathname+=`/${query.get('recordId')}/photos/${query.get('photoIndex')}`;
+    const legacy=query.has('photoIndex'),file=query.has('fileId');
+    if(resource==='areas' || !UUID.test(query.get('recordId')||'') || legacy===file || (legacy&&!/^\d{1,2}$/.test(query.get('photoIndex')||'')) || (file&&!/^[a-f0-9]{64}$/.test(query.get('fileId')||'')) || [...query.keys()].some(key=>!['resource','recordId','photoIndex','fileId'].includes(key))) return reply(res,400,'사진 정보를 확인해 주세요.');
+    target.pathname+=file?`/${query.get('recordId')}/files/${query.get('fileId')}`:`/${query.get('recordId')}/photos/${query.get('photoIndex')}`;
   } else {
     for(const key of ['start','end','search','status','limit','offset']) if(query.has(key))target.searchParams.set(key,query.get(key));
   }
@@ -40,7 +44,7 @@ module.exports=async function handler(req,res) {
     const upstream=await fetch(target,{method:'GET',headers:{Accept:photo?'image/jpeg,image/png,image/webp,image/gif':'application/json'},cache:'no-store',redirect:'error',signal:AbortSignal.timeout(20000)});
     if(!upstream.ok) return reply(res,[400,403,404].includes(upstream.status)?upstream.status:502,'관리현황을 불러오지 못했습니다.');
     const mime=(upstream.headers.get('content-type')||'').split(';')[0].trim().toLowerCase();
-    if(photo?!['image/jpeg','image/png','image/webp','image/gif'].includes(mime):mime!=='application/json') return reply(res,502,'응답 형식을 확인하지 못했습니다.');
+    if(photo?!(query.has('fileId')?['image/jpeg','image/png','image/webp']:['image/jpeg','image/png','image/webp','image/gif']).includes(mime):mime!=='application/json') return reply(res,502,'응답 형식을 확인하지 못했습니다.');
     if(Number(upstream.headers.get('content-length')||0)>MAX_RESPONSE) return reply(res,502,'응답 크기를 확인해 주세요.');
     let size=0; const chunks=[];
     for await(const chunk of upstream.body) { size+=chunk.length; if(size>MAX_RESPONSE) throw new Error('oversize'); chunks.push(Buffer.from(chunk)); }
