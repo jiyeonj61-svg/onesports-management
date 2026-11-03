@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {adminEntryResponse} from '../admin-routing.mjs';
+import {adminEntryResponse} from '../admin-routing.js';
 import {redirectLegacyAdmin} from '../assets/admin-entry.js';
 import {integrationSettings} from '../assets/integration-public.js';
 
