@@ -1,4 +1,4 @@
-const CACHE_NAME = 'onesports-management-v10-20261103';
+const CACHE_NAME = 'onesports-management-v11-20261103';
 const APP_SHELL = [
   '/',
   '/index.html',
@@ -43,6 +43,7 @@ self.addEventListener('fetch', (event) => {
   if (/^\/(members|admin|hq|staff)(\/|\.|$)/.test(url.pathname)
       || url.pathname.includes('member-') || url.pathname.includes('members.js')
       || url.pathname === '/assets/data.js' || url.pathname === '/assets/admin.js'
+      || url.pathname === '/assets/admin-entry.js'
       || url.pathname.includes('/assets/integration-')
       || url.pathname === '/config.js' || request.headers.has('authorization')) {
     event.respondWith(fetch(request, { cache: 'no-store' }));

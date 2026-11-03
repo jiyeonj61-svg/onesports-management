@@ -12,12 +12,12 @@ test('personal routes and authorized responses never enter service-worker cache'
     caches:{open:async()=>({put:(...v)=>cacheWrites.push(v)}),match:async()=>undefined},
     fetch:async(request,options)=>{network.push({request,options});return {ok:true,clone(){return this}};}};
   vm.runInNewContext(source,sandbox);
-  for(const route of ['/members','/members/my','/members/renew','/members/requests','/admin','/admin.html','/members.html','/assets/member-client.js']){
+  for(const route of ['/members','/members/my','/members/renew','/members/requests','/admin','/admin.html','/members.html','/assets/member-client.js','/assets/admin-entry.js']){
     let response;
     handlers.fetch({request:new Request('https://onesports-management.vercel.app'+route),respondWith:p=>response=p});
     assert.ok(response,route);await response;
   }
-  assert.equal(cacheWrites.length,0);assert.equal(network.length,8);
+  assert.equal(cacheWrites.length,0);assert.equal(network.length,9);
   assert.ok(network.every(item=>item.options.cache==='no-store'));
 });
 

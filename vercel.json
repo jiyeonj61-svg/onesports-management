@@ -1,6 +1,10 @@
 {
   "installCommand": "npm ci --omit=dev --ignore-scripts",
   "cleanUrls": true,
+  "proxy": {
+    "entrypoint": "admin-routing.mjs",
+    "matcher": ["/admin", "/admin/:path*", "/admin.html", "/admin.html/:path*"]
+  },
   "rewrites": [
     { "source": "/members/:path*", "destination": "/members" }
   ],

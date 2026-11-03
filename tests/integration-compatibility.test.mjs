@@ -2,6 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import vm from 'node:vm';
+import {createRequire} from 'node:module';
+import {pathToFileURL} from 'node:url';
+import path from 'node:path';
 import {createPublicIntegrationAdapter,integrationSettings} from '../assets/integration-public.js';
 import {createLegacyIntegrationAdapter} from '../assets/integration-legacy.js';
 import {localISODate,addDays,monthRange,formatDateTime} from '../assets/common.js';
@@ -9,7 +12,7 @@ import {localISODate,addDays,monthRange,formatDateTime} from '../assets/common.j
 const SITE='10000000-0000-4000-8000-000000000001',ROW='20000000-0000-4000-8000-000000000001';
 const config={enabled:true,siteId:SITE,hqOrigin:'https://hq.example.test'};
 const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json'}});
-async function proxy(file,env,fetcher){const sandbox={module:{exports:{}},process:{env},URL,Buffer,AbortSignal,fetch:fetcher};vm.runInNewContext(await fs.readFile(file,'utf8'),sandbox);return sandbox.module.exports;}
+async function proxy(file,env,fetcher){const sandbox={module:{exports:{}},process:{env},URL,Buffer,AbortSignal,fetch:fetcher,require:createRequire(pathToFileURL(path.resolve(file)))};vm.runInNewContext(await fs.readFile(file,'utf8'),sandbox);return sandbox.module.exports;}
 async function invoke(handler,url,{method='GET',headers={},body}={}){
  const request={url,method,headers,async *[Symbol.asyncIterator](){if(body)yield Buffer.from(JSON.stringify(body));}};
  const result={statusCode:200,headers:{},body:null,setHeader(k,v){this.headers[k.toLowerCase()]=v;},end(value){this.body=value===undefined?Buffer.alloc(0):Buffer.from(value);}};
@@ -77,18 +80,16 @@ test('logout invalidates an in-flight private photo before a Blob URL is created
  const loading=adapter.photoUrl(`legacy:issues:${ROW}:0`);await start;adapter.clear();finish(new Response(new Uint8Array([255,216,255]),{headers:{'Content-Type':'image/jpeg'}}));
  await assert.rejects(loading,/로그인 상태/);
 });
-test('legacy relay blocks foreign origins, destructive paths and scope injection',async()=>{
- const calls=[];const handler=await proxy('api/integration-legacy.js',{VERCEL_ENV:'production',LEGACY_INTEGRATION_ENABLED:'true',API_ORIGIN_PRODUCTION:'https://worker.example.test'},async(url,options)=>{calls.push({url:String(url),options});return json({ok:true,item:{id:ROW}});});
+test('retired legacy relay never forwards tokens, cookies, bodies or caller routes',async()=>{
+ const calls=[];const handler=await proxy('api/integration-legacy.js',{VERCEL_ENV:'production',LEGACY_INTEGRATION_ENABLED:'true',INTEGRATION_HQ_ORIGIN:'https://hq.example.test',API_ORIGIN_PRODUCTION:'https://worker.example.test'},async(...args)=>{calls.push(args);throw new Error('Retired relay must not forward');});
  const headers={authorization:'Bearer synthetic.access.token',host:'management.example.test',origin:'https://management.example.test','content-type':'application/json',cookie:'must-not-forward'};
- assert.equal((await invoke(handler,'/?path=operations/issues',{method:'POST',headers,body:{title:'Synthetic'}})).statusCode,200);
- assert.equal(calls[0].options.headers.cookie,undefined);assert.ok(calls[0].url.endsWith('/api/integration/legacy/operations/issues'));
- assert.equal((await invoke(handler,'/?path=operations/issues',{method:'POST',headers:{...headers,origin:'https://attacker.test'},body:{}})).statusCode,403);
- assert.equal((await invoke(handler,'/?path=operations/issues',{method:'DELETE',headers})).statusCode,405);
- assert.equal((await invoke(handler,'/?path=operations/issues&siteId=elsewhere',{headers})).statusCode,400);
- assert.equal((await invoke(handler,'/?path=../hq/settings',{headers})).statusCode,400);
- assert.equal((await invoke(handler,'/?path=session',{headers})).statusCode,200);
- assert.equal((await invoke(handler,'/?path=legacy-files&resource=issues&recordId='+ROW,{headers})).statusCode,200);
- assert.equal((await invoke(handler,'/?path=files/'+('a'.repeat(64))+'/download',{headers})).statusCode,200);
+ for(const method of ['GET','POST','PATCH','DELETE']){
+  const response=await invoke(handler,'/?path=../hq/settings&returnUrl=https://attacker.test',{method,headers,body:{title:'Synthetic'}});
+  assert.equal(response.statusCode,410);assert.equal(response.json().loginUrl,'https://hq.example.test/staff/login');
+ }
+ assert.equal(calls.length,0);
+ const unconfigured=await proxy('api/integration-legacy.js',{VERCEL_ENV:'preview',LEGACY_INTEGRATION_ENABLED:'true',API_ORIGIN_PRODUCTION:'https://production.example.test'},()=>{throw new Error('No production fallback');});
+ assert.equal((await invoke(unconfigured,'/?path=session',{headers})).statusCode,503);
 });
 test('today and rendered timestamps use Korea while date-only calendar math does not shift',()=>{
  assert.equal(localISODate(new Date('2026-11-02T16:00:00Z')),'2026-11-03');

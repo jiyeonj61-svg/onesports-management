@@ -13,5 +13,8 @@
     "jsqr": "^1.4.0",
     "pg": "^8.23.0",
     "qrcode-generator": "^2.0.4"
+  },
+  "dependencies": {
+    "@vercel/functions": "3.10.6"
   }
 }

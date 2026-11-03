@@ -1,4 +1,5 @@
 import { data } from './data.js';
+import { redirectLegacyAdmin } from './admin-entry.js';
 import { initMemberAdmin, clearMemberAdmin } from './member-admin.js';
 import {
   APP_START_DATE,
@@ -890,6 +891,14 @@ async function startAdminApp() {
 }
 
 async function bootstrap() {
+  $('#loginScreen').classList.add('hidden');
+  $('#adminApp').classList.add('hidden');
+  try { if(await redirectLegacyAdmin()) return; }
+  catch(error){
+    document.documentElement.dataset.appReady='error';
+    const banner=$('#setupBanner');banner.className='setup-banner error';banner.textContent=error.message;
+    return;
+  }
   registerServiceWorker();
   bindEvents();
   state.connection = await data.init();

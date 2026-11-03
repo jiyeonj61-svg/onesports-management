@@ -625,6 +625,13 @@ async function bootstrap() {
   bindEvents();
   const connection = await data.init();
   renderModeBanner(connection);
+  const loginLink=$('#workLoginLink');
+  if(connection.integration?.enabled){
+    loginLink.href=connection.integration.staffUrl;
+    loginLink.textContent='현장 직원 로그인';loginLink.setAttribute('aria-label','현장 직원 로그인');
+  }else{
+    loginLink.textContent='관리자';loginLink.setAttribute('aria-label','관리자 로그인');
+  }
   state.areas = await data.getAreas();
   await Promise.all([loadDaily(), loadAllIssues(), loadAllInventories(), loadAllHeadOfficeChecks()]);
 
