@@ -1,3 +1,5 @@
+import {residentArguments,relayResidentPhoto} from './resident-service.js';
+
 const resources = new Set(['areas', 'inspections', 'issues', 'inventories', 'head_office_checks']);
 const actions = new Set(['list', 'get', 'public_list', 'summary', 'create', 'update']);
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -35,6 +37,13 @@ export function createHandler({ supabaseUrl, serviceKey, publicKey, environment,
         const admins = await request(`/rest/v1/app_admins?select=user_id,active&user_id=eq.${user.id}&active=eq.true&limit=1`, { headers });
         if (!admins.ok || !(await admins.json()).some(a => a.user_id === user.id && a.active === true)) return json({ code: 'forbidden' }, 403);
         return json({ id: user.id, email: user.email });
+      }
+      if (msg.action === 'residentService') {
+        const args=residentArguments(p);
+        if(!args)return json({code:'invalid_request'},400);
+        const response=await request('/rest/v1/rpc/osi_staff_resident_service',{method:'POST',headers,body:JSON.stringify(args)});
+        const data=await response.json();
+        return json(response.ok?await relayResidentPhoto(p,data,request,headers):{code:data.code||'storage_error'},response.status);
       }
       if (!uuid.test(p.siteId || '') || !resources.has(p.resource)) return json({ code: 'invalid_request' }, 400);
       if (msg.action === 'rpc') {

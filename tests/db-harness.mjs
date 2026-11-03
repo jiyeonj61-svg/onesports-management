@@ -2,12 +2,12 @@ import EmbeddedPostgres from 'embedded-postgres';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 
-export async function testDatabase() {
+export async function testDatabase({port = 55439} = {}) {
   const directory = path.resolve('work', `pg-test-${Date.now()}`);
   await fs.mkdir(directory, { recursive: true });
   const server = new EmbeddedPostgres({
     databaseDir: directory, user: 'postgres', password: 'local-test-only',
-    port: 55439, persistent: true, initdbFlags: ['--encoding=UTF8', '--locale=C'],
+    port, persistent: true, initdbFlags: ['--encoding=UTF8', '--locale=C'],
     postgresFlags: ['-c', 'listen_addresses=127.0.0.1'],
     onLog: () => {}, onError: message => { if (/fatal|error/i.test(String(message))) console.error(String(message)); },
   });

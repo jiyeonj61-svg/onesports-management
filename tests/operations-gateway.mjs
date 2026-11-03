@@ -27,3 +27,79 @@ test('private record is never returned through public photo path',async()=>{cons
 test('only stored legacy path can be fetched and output is no-store',async()=>{const f=await fixture();let n=0;f.respond(()=>++n===1?Response.json({item:{integration_legacy_record:true,is_public:true,photo_paths:['known/photo.jpg']}}):new Response(new Uint8Array([255,216,255]),{headers:{'Content-Type':'image/jpeg'}}));const r=await f.invoke('legacyPhoto',{siteId,resource,recordId:siteId,index:0,publicOnly:true});assert.equal(r.status,200);assert.equal(r.headers.get('cache-control'),'private, no-store');assert.match(f.calls[1].url,/\/storage\/v1\/object\/authenticated\/management-photos\/known\/photo.jpg$/);});
 test('stored path traversal rejected and non-legacy rows excluded',async()=>{for(const item of [{integration_legacy_record:true,photo_paths:['../secret']},{integration_legacy_record:false,photo_paths:['known/photo.jpg']}]){const f=await fixture();f.respond(()=>Response.json({item}));assert.equal((await f.invoke('legacyPhoto',{siteId,resource,recordId:siteId,index:0,publicOnly:false})).status,404);assert.equal(f.calls.length,1);}});
 test('health proves signature/environment without reading data',async()=>{const f=await fixture();const r=await f.invoke('health',{});assert.equal(r.status,200);assert.equal(f.calls.length,0);});
+
+test('resident service carries only signed site and staff actor to the fixed RPC',async()=>{
+ const f=await fixture(),actorId=crypto.randomUUID(),payload={entity:'requests',limit:20};
+ const r=await f.invoke('residentService',{siteId,actorId,service:'guest',action:'admin_list',payload});
+ assert.equal(r.status,200);assert.equal(f.calls.length,1);
+ assert.equal(f.calls[0].url,'https://isolated-test.supabase.co/rest/v1/rpc/osi_staff_resident_service');
+ assert.deepEqual(JSON.parse(f.calls[0].init.body),{p_site_id:siteId,p_actor_id:actorId,p_service:'guest',p_action:'admin_list',p_payload:payload});
+ assert.equal(r.headers.get('cache-control'),'private, no-store');
+});
+test('resident gateway rejects arbitrary RPC, scope and settings actions before storage',async()=>{
+ const f=await fixture(),base={siteId,actorId:crypto.randomUUID(),service:'guest',action:'admin_list',payload:{}};
+ for(const delta of [{siteId:'bad'},{actorId:'bad'},{service:'member_service'},{service:'__proto__'},{service:'member',action:'admin_save'},{action:'submit_request'},{payload:[]},{resource:'auth.users'}]){
+  assert.equal((await f.invoke('residentService',{...base,...delta})).status,400);
+ }
+ assert.equal(f.calls.length,0);
+});
+test('resident readiness is a signed member read and does not enable settings writes',async()=>{
+ const f=await fixture(),actorId=crypto.randomUUID(),status={center_name:'Synthetic center',applications_enabled:false,requests_enabled:true,programs:[{program:'fitness_golf',ready:false},{program:'gx',ready:true}],message:'접수 준비 상태를 확인해 주세요.'};
+ f.respond(()=>Response.json({ok:true,status}));
+ const r=await f.invoke('residentService',{siteId,actorId,service:'member',action:'status',payload:{}});
+ assert.equal(r.status,200);assert.deepEqual(await r.json(),{ok:true,status});
+ assert.deepEqual(JSON.parse(f.calls[0].init.body),{p_site_id:siteId,p_actor_id:actorId,p_service:'member',p_action:'status',p_payload:{}});
+ assert.equal((await f.invoke('residentService',{siteId,actorId,service:'guest',action:'status',payload:{}})).status,400);
+ assert.equal((await f.invoke('residentService',{siteId,actorId,service:'member',action:'admin_save',payload:{entity:'settings',data:{requests_enabled:true}}})).status,400);
+ assert.equal(f.calls.length,1);
+});
+test('resident gateway signature binds staff identity and protects database diagnostics',async()=>{
+ const f=await fixture(),base={siteId,actorId:crypto.randomUUID(),service:'guest',action:'admin_detail',payload:{id:siteId}};
+ const envelope=await f.envelope('residentService',base);
+ envelope.message=envelope.message.replace(base.actorId,crypto.randomUUID());
+ assert.equal((await f.handler(new Request('https://gateway.invalid',{method:'POST',body:JSON.stringify(envelope)}))).status,401);
+ assert.equal(f.calls.length,0);
+ f.respond(()=>Response.json({code:'42501',message:'synthetic-private-person',details:'synthetic-service-key'},{status:403}));
+ const r=await f.invoke('residentService',base);assert.equal(r.status,403);assert.deepEqual(await r.json(),{code:'42501'});
+});
+
+test('resident private image is resolved by SQL and relayed as bounded pixels without raw path',async()=>{
+ const f=await fixture(),objectId=crypto.randomUUID(),path=`requests/${siteId}/${objectId}.png`;
+ const bytes=Buffer.from('89504e470d0a1a0a001122','hex');
+ f.respond((url)=>url.includes('/rpc/')?Response.json({ok:true,photo:{bucket:'member-service-files',path}}):new Response(bytes,{headers:{'Content-Type':'image/png'}}));
+ const r=await f.invoke('residentService',{siteId,actorId:crypto.randomUUID(),service:'member',action:'photo',payload:{entity:'requests',id:siteId,kind:'photo',index:0}});
+ assert.equal(r.status,200);const body=await r.json();assert.deepEqual(body,{ok:true,photo:{mime:'image/png',base64:bytes.toString('base64')}});
+ assert.equal(f.calls[1].url,`https://isolated-test.supabase.co/storage/v1/object/authenticated/member-service-files/${path}`);
+});
+test('resident image reading preserves legacy jpeg extension compatibility',async()=>{
+ const f=await fixture(),path=`requests/${siteId}/${crypto.randomUUID()}.jpeg`,bytes=Buffer.from('ffd8ff001122','hex');
+ f.respond(url=>url.includes('/rpc/')?Response.json({ok:true,photo:{bucket:'member-service-files',path}}):new Response(bytes,{headers:{'Content-Type':'image/jpeg'}}));
+ const r=await f.invoke('residentService',{siteId,actorId:crypto.randomUUID(),service:'member',action:'photo',payload:{entity:'requests',id:siteId,kind:'photo',index:0}});
+ assert.equal(r.status,200);assert.deepEqual(await r.json(),{ok:true,photo:{mime:'image/jpeg',base64:bytes.toString('base64')}});
+ assert.equal(f.calls[1].url,`https://isolated-test.supabase.co/storage/v1/object/authenticated/member-service-files/${path}`);
+});
+test('resident image relay rejects other buckets, traversal, HTML and oversize responses',async()=>{
+ for(const variant of ['bucket','path','type','length']){
+ const f=await fixture(),path=`requests/${siteId}/${crypto.randomUUID()}.png`;
+ f.respond(url=>url.includes('/rpc/')?Response.json({ok:true,photo:{bucket:variant==='bucket'?'other':'member-service-files',path:variant==='path'?'../secret':path}}):new Response('<secret>',{headers:{'Content-Type':variant==='type'?'text/html':'image/png','Content-Length':variant==='length'?'9999999':'8'}}));
+ const r=await f.invoke('residentService',{siteId,actorId:crypto.randomUUID(),service:'member',action:'photo',payload:{entity:'requests',id:siteId,kind:'photo',index:0}});
+ assert.equal(r.status,503);assert.deepEqual(await r.json(),{code:'gateway_unavailable'});
+ }
+});
+test('resident photo uploads require SQL-authorized parent path and original image bytes',async()=>{
+ const f=await fixture(),path=`requests/${siteId}/${crypto.randomUUID()}.jpg`,bytes=Buffer.from('ffd8ff001122','hex');
+ f.respond(url=>url.includes('/rpc/')?Response.json({ok:true,upload:true,photo:{bucket:'member-service-files',path,mime:'image/jpeg',bytes:bytes.length}}):Response.json({Key:path}));
+ const r=await f.invoke('residentService',{siteId,actorId:crypto.randomUUID(),service:'member',action:'admin_upload_photo',payload:{entity:'requests',id:siteId,mime:'image/jpeg',base64:bytes.toString('base64'),purpose:'action'}});
+ assert.equal(r.status,200);assert.equal(f.calls.length,2);assert.equal(f.calls[1].init.method,'POST');
+ assert.equal(f.calls[1].init.headers['x-upsert'],'true');assert.deepEqual(Buffer.from(f.calls[1].init.body),bytes);
+ assert.deepEqual(await r.json(),{ok:true,photo:{path,mime:'image/jpeg',bytes:bytes.length}});
+});
+test('mismatched upload parents and MIME signatures never reach Storage',async()=>{
+ for(const mismatch of ['parent','signature']){
+ const f=await fixture(),path=`requests/${mismatch==='parent'?crypto.randomUUID():siteId}/${crypto.randomUUID()}.jpg`;
+ const bytes=Buffer.from('89504e470d0a1a0a','hex');
+ f.respond(()=>Response.json({ok:true,upload:true,photo:{bucket:'member-service-files',path,mime:'image/jpeg',bytes:bytes.length}}));
+ const r=await f.invoke('residentService',{siteId,actorId:crypto.randomUUID(),service:'member',action:'admin_upload_photo',payload:{id:siteId,mime:'image/jpeg',base64:bytes.toString('base64'),purpose:'action'}});
+ assert.equal(r.status,503);assert.equal(f.calls.length,1);
+ }
+});
