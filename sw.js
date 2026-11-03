@@ -1,4 +1,4 @@
-const CACHE_NAME = 'onesports-management-v9-20260928';
+const CACHE_NAME = 'onesports-management-v10-20261103';
 const APP_SHELL = [
   '/',
   '/index.html',
@@ -40,9 +40,10 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin || url.pathname.startsWith('/api/')) return;
   // Personal and authenticated screens must never enter a shared offline cache.
-  if (/^\/(members|admin)(\/|\.|$)/.test(url.pathname)
+  if (/^\/(members|admin|hq|staff)(\/|\.|$)/.test(url.pathname)
       || url.pathname.includes('member-') || url.pathname.includes('members.js')
       || url.pathname === '/assets/data.js' || url.pathname === '/assets/admin.js'
+      || url.pathname.includes('/assets/integration-')
       || url.pathname === '/config.js' || request.headers.has('authorization')) {
     event.respondWith(fetch(request, { cache: 'no-store' }));
     return;

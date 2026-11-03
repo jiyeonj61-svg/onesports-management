@@ -124,6 +124,14 @@ try{
   assert.equal(first.items.length,1);assert.equal(first.total,2);assert.equal(last.items.length,0);assert.equal(last.total,2);
   const publicIssues=await call(A,'issues','public_list',{limit:1});assert.equal(publicIssues.total,1);
   const notMatched=await call(A,'issues','list',{search:'not present'});assert.equal(notMatched.total,0);
+  assert.equal((await call(A,'issues','list',{status:'received'})).total,1);
+  assert.equal((await call(A,'issues','list',{status:'completed'})).total,0);
+ });
+ await check('optimistic update rejects stale timestamps without overwriting the newer edit',async()=>{
+  const before=(await call(A,'issues','get',{id:issueA.id})).item;
+  await call(A,'issues','update',{id:issueA.id,title:'First edit',expected_updated_at:before.updated_at,actor_type:'SITE_ADMIN',actor_id:ADMIN});
+  await assert.rejects(call(A,'issues','update',{id:issueA.id,title:'Stale edit',expected_updated_at:before.updated_at}),e=>e.code==='40001');
+  assert.equal((await call(A,'issues','get',{id:issueA.id})).item.title,'First edit');
  });
  await check('mapping API is not granted even to service_role',async()=>{
   await assert.rejects(asRole('service_role',()=>sql.query('select public.integration_map_legacy_records($1,$2,$3,$4)',[A,'[]','Test mapping evidence',ADMIN])),/permission denied/);
@@ -146,6 +154,18 @@ try{
  await check('audit records omit payload contents and shared task unchanged',async()=>{
   assert.ok((await sql.query('select count(*)::int n from osi_operation_audit')).rows[0].n>5);
   assert.equal((await sql.query('select title from calendar_tasks where id=7')).rows[0].title,'Shared untouched');
+ });
+ await check('mapping preserves proven historical public predicates only with explicit per-row evidence',async()=>{
+  const legacy=(await sql.query("insert into head_office_checks(check_date,title,result,photo_paths) values($1,'Historical public','Old completed result',ARRAY['2026-11/old.jpg']) returning id,updated_at",[today])).rows[0];
+  const hash=(await sql.query("select encode(extensions.digest(convert_to((to_jsonb(t)-'integration_site_id'-'integration_legacy_record'-'integration_is_public')::text,'UTF8'),'sha256'),'hex') h from head_office_checks t where id=$1",[legacy.id])).rows[0].h;
+  const entry={resource:'head_office_checks',id:legacy.id,sha256:hash};
+  const map=manifest=>sql.query('select integration_map_legacy_records($1,$2::jsonb,$3,$4)',[A,JSON.stringify(manifest),'Historical source and policy reviewed in isolated test',ADMIN]);
+  await assert.rejects(map([entry]),/historical visibility/);
+  await map([{...entry,was_public:true,visibility_evidence:'Verified pre-migration head_office_checks_public_read: check_date >= 2026-09-01'}]);
+  const publicRow=(await call(A,'head_office_checks','public_list',{id:legacy.id})).items[0];
+  assert.equal(publicRow.legacy_photo_count,1);assert.equal('photo_paths' in publicRow,false);
+  assert.equal(new Date((await call(A,'head_office_checks','get',{id:legacy.id})).item.updated_at).toISOString(),legacy.updated_at.toISOString());
+  await assert.rejects(map([{...entry,was_public:false,visibility_evidence:'Changed mapping review should never silently override'}]),/already mapped differently/);
  });
 }finally{
  await fs.mkdir('work',{recursive:true});await fs.writeFile('work/integration-test-results.json',JSON.stringify(results,null,2));

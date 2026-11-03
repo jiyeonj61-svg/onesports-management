@@ -4,7 +4,7 @@
 
 `supabase/migrations/20261030_integration_operations.sql`은 기존 운영 테이블에 단지 범위를 추가하는 준비 마이그레이션입니다. 기존 행의 소속을 추정하거나 운영 데이터를 옮기지 않습니다. 단지 기본정보·접속 가능 상태·공용 비밀번호 버전·세션·본사 역할의 원본은 입찰 앱의 Cloudflare D1입니다. 이 저장소는 검증된 단지 UUID만 참조합니다. 두 저장소의 ID 일치가 외래키나 분산 트랜잭션을 의미하지 않습니다.
 
-Workers가 현재 본사/현장 세션, 활성 상태, 기능, 단지 범위를 확인한 뒤 서버 전용 `integration_operations` RPC를 호출합니다. 이 함수는 `service_role`만 실행할 수 있으며 고정된 resource·action·컬럼 허용 목록을 사용합니다. `service_role`은 RLS를 우회하므로 보호의 핵심은 Workers 인증과 이 RPC의 모든 SQL에 포함된 단지 검증입니다. RLS만으로 보호된다고 볼 수 없습니다. 서비스 키를 일반 DB 프록시 또는 브라우저에 전달하면 안 됩니다.
+Workers가 현재 본사/현장 세션, 활성 상태, 기능, 단지 범위를 확인한 뒤 서명된 Supabase Edge gateway를 통해 서버 전용 `integration_operations` RPC를 호출합니다. Edge gateway는 설정된 P-256 공개키로 요청을 검증하고, Supabase 내장 service role 자격증명으로 허용된 RPC/사진/기존 관리자 검증 동작만 수행합니다. 운영 service role 키를 Cloudflare나 브라우저로 복사하지 않습니다. 이 RPC는 `service_role`만 실행할 수 있으며 고정된 resource·action·컬럼 허용 목록을 사용합니다. `service_role`은 RLS를 우회하므로 보호의 핵심은 Workers 인증, gateway 서명·동작 검증, 이 RPC의 모든 SQL에 포함된 단지 검증입니다. RLS만으로 보호된다고 볼 수 없습니다.
 
 원본 테이블의 `integration_site_id`가 NULL인 기존 행은 기존 정책을 유지합니다. 매핑된 행과 새 통합 행은 `anon`·`authenticated` 대상의 restrictive RLS 정책이 기존 전역 관리자 정책과 공개 정책을 모두 제한합니다. 따라서 기존 `/admin`이나 직접 Supabase API로 다른 단지에 우회 접근할 수 없습니다. 다만 **행을 실제 매핑하는 순간 그 행은 구버전 공개/관리 화면에서 제외되므로, 호환 화면 전환·공개 범위 검증이 끝나기 전에는 매핑 함수를 실행하면 안 됩니다.** 준비 마이그레이션만 적용한 상태에서는 기존 행의 읽기·쓰기와 회원서비스를 그대로 유지합니다.
 
@@ -35,9 +35,9 @@ Workers가 현재 본사/현장 세션, 활성 상태, 기능, 단지 범위를 
 - 읽기 응답: `{ok:true,items:[],total,limit,offset}` 또는 `{ok:true,item:{...}}`. total은 필터를 적용한 해당 단지 전체 건수이며 빈 페이지에서도 정확합니다.
 - 쓰기 응답: `{ok:true,item:{...}}`, 삭제는 `{ok:true,deleted:true}`.
 - `get`, `update`, `delete`는 `id`가 필요합니다. 대상 ID가 다른 단지에 속하거나 존재하지 않으면 같은 `P0002` 오류를 냅니다.
-- list/public_list 필터: `start`, `end`(해당 resource 날짜), `search`(title/name), `limit`(1–200, 기본 100), `offset`(0–100000). 페이지 길이를 전체 건수로 표시하면 안 됩니다. 실제 대시보드는 날짜 필터와 전체 페이지 집계가 필요합니다.
+- list/public_list 필터: `start`, `end`(해당 resource 날짜), `search`(title/name), `status`(점검·민원·비품), `limit`(1–200, 기본 100), `offset`(0–100000). 페이지 길이를 전체 건수로 표시하면 안 됩니다. 실제 대시보드는 날짜 필터와 전체 페이지 집계가 필요합니다.
 - create는 UUID `request_id`가 필수입니다. DB transaction advisory lock과 원문 해시로 동시/반복 요청을 하나의 결과에 묶습니다. 같은 키의 다른 내용은 거절합니다. 네트워크 응답 유실 시 새 키를 만들지 않고 같은 내용·같은 키로 재시도합니다.
-- update는 전달한 필드만 바꿉니다. 새 기록 ID를 직접 지정하거나 권한/단지/사진 경로를 본문에 넣을 수 없습니다.
+- update는 전달한 필드만 바꿉니다. `expected_updated_at`을 보내면 행 잠금 아래 기존 수정시각과 비교하며 달라졌을 때 SQLSTATE `40001`로 거절합니다. 서버는 이를 409 충돌로 표시해야 합니다. 새 기록 ID를 직접 지정하거나 권한/단지/사진 경로를 본문에 넣을 수 없습니다.
 - `summary`는 resource=`inspections`에서만 허용하고, payload는 선택적 `start`/`end` 날짜 필터만 받습니다. 둘 다 생략하면 서버 KST 오늘을 사용합니다. `{ok:true,today,periodStart,periodEnd,inspectionCount,completedCount,expectedChecks,openIssueCount,recentHeadOfficeChecks:[]}`를 반환합니다. inspectionCount는 선택 기간 점검 행 수, completedCount는 그중 normal/completed 수, expectedChecks는 **하루 기준** 활성 공간 수×2, openIssueCount는 전체 기간의 미완료 민원·조치 수입니다. 최근 본사점검은 전체 기간에서 날짜/수정시각 내림차순 5개이며 담당자/파일을 제외합니다. 페이지 제한 없이 DB 전체 단지 범위에서 집계합니다.
 
 | resource | 쓰기 필드 | 핵심 규칙 |
@@ -54,7 +54,7 @@ Workers는 현장에 삭제·단지 설정·공개 변경·본사점검 변경·
 
 ## 공개 열람과 파일
 
-`public_list`도 service_role 전용입니다. Workers가 D1의 해당 단지 `public_enabled`를 먼저 확인해야 합니다. 함수는 해당 단지의 명시적 공개 행만 반환하고 담당자·작성자·내부 ID·파일 경로를 공개 응답에서 제외합니다. 신규 단지는 공개 열람 기본 OFF입니다.
+`public_list`도 service_role 전용입니다. Workers가 D1의 해당 단지 `public_enabled`를 먼저 확인해야 합니다. 함수는 해당 단지의 명시적 공개 행만 반환하고 담당자·작성자·단지 내부 ID·파일 경로를 공개 응답에서 제외합니다. 기존 사진은 `legacy_photo_count`만 반환하고 고정된 기록 ID·배열 인덱스의 공개 사진 API에서 권한을 다시 확인합니다. 신규 단지는 공개 열람 기본 OFF입니다.
 
 기존 `management-photos`는 저장소 SQL상 공개 버킷이며 실제 운영 상태는 별도 확인해야 합니다. 이미 존재하는 `photo_paths`는 매핑 때 삭제/이동/변경하지 않으며 내부 get/list에서는 `integration_legacy_record`와 함께 반환합니다. 이를 비공개 첨부라고 표시하면 안 됩니다. 새 통합 업로드는 Workers의 기존 R2 FILES 바인딩과 D1 `os_files`로 처리하며, 이 RPC에 임의 photo_paths를 저장하는 방식은 거절합니다. 파일 열람 전 RPC get으로 기록·단지 소속을 재확인해야 합니다. 기존 사진을 새로운 공개 버킷에 복사하지 않습니다.
 
@@ -64,7 +64,8 @@ Workers는 현장에 삭제·단지 설정·공개 변경·본사점검 변경·
 
 | 위치 | 변수/권한 | 비고 |
 | --- | --- | --- |
-| Workers 환경별 Secret | MANAGEMENT_SUPABASE_SERVICE_ROLE_KEY | 브라우저/VITE 변수 금지; 최소 필요한 서버 경로에서만 사용 |
+| Workers 환경별 Secret | MANAGEMENT_GATEWAY_PRIVATE_KEY | P-256 서명키. 브라우저/VITE 변수 금지; 지정된 Edge gateway 호출에만 사용 |
+| Supabase Edge 설정 | 검증용 공개 JWK 및 내장 service role | service role 비밀값을 외부로 가져오거나 표시하지 않음 |
 | Workers 환경별 설정 | MANAGEMENT_SUPABASE_URL, MANAGEMENT_SUPABASE_PROJECT_REF, MANAGEMENT_DATA_ENV | API의 APP_ENV와 일치; staging/preview 이름만으로 분리로 판단하지 않음 |
 | 기존 Vercel 관리앱 | SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY | 기존 공개 config API 유지; service key 추가하지 않음 |
 | 승인된 DB 운영자 연결 | PGHOST/PGDATABASE/PGUSER/PGSSLMODE 및 안전한 자격증명 공급 | 대화·Git·명령 출력에 비밀값을 넣지 않음 |
@@ -110,7 +111,7 @@ encode(digest(convert_to(
 - inspections/head_office_checks 공개 전환은 승인된 개별 범위를 별도 확인함. 이 준비 SQL은 공개를 자동 켜지 않음.
 - 기존 회원서비스를 기존 센터에 유지하는 전환 계획과 회귀 테스트.
 
-게이트가 완료되지 않은 상태에서는 매핑을 실행하지 않아야 합니다. 현재 이 저장소 변경만으로 기존 공개/관리 UI의 멀티단지 호환 전환이 완성된 것은 아닙니다.
+게이트가 완료되지 않은 상태에서는 매핑을 실행하지 않아야 합니다. 현재 기존 공개/관리 UI의 호환 adapter가 구현되어 있으며 실제 전환은 [기존 화면 호환 절차](legacy-compatibility.md)의 환경 설정·명시적 매핑·외부 검증을 완료해야 합니다.
 
 ## 백업·복구·롤백
 

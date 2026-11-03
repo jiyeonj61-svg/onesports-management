@@ -1,4 +1,6 @@
-import { APP_START_DATE, AREA_FALLBACK, appCurrentDate, safeArray, uuid } from './common.js';
+import { APP_START_DATE, AREA_FALLBACK, appCurrentDate, escapeHtml, safeArray, uuid } from './common.js';
+import { createPublicIntegrationAdapter, integrationSettings } from './integration-public.js';
+import { createLegacyIntegrationAdapter } from './integration-legacy.js';
 
 const DEMO_STORE_KEY = 'onesports-management-demo-v6';
 const DEMO_ADMIN_KEY = 'onesports-management-demo-admin';
@@ -26,6 +28,9 @@ let mode = 'initializing';
 let supabase = null;
 let configError = '';
 let initialized = false;
+let integration = { enabled: false }, publicIntegration = null, legacyIntegration = null;
+const isAdminRoute = () => /^\/admin(?:\.html)?\/?$/.test(location.pathname);
+const integrationListeners = new Set();
 
 function nowIso() {
   return new Date().toISOString();
@@ -40,6 +45,7 @@ function getFallbackConfig() {
   return {
     supabaseUrl: config.supabaseUrl || config.SUPABASE_URL || '',
     supabasePublishableKey: config.supabasePublishableKey || config.SUPABASE_PUBLISHABLE_KEY || config.supabaseAnonKey || '',
+    integration: config.integration || { enabled: false },
   };
 }
 
@@ -48,14 +54,16 @@ async function fetchRuntimeConfig() {
   if (!location.protocol.startsWith('http')) return fallback;
   try {
     const response = await fetch('/api/config', { cache: 'no-store' });
-    if (!response.ok) return fallback;
+    if (!response.ok) throw new Error('운영 연결 설정을 불러오지 못했습니다.');
     const runtime = await response.json();
     return {
       supabaseUrl: runtime.supabaseUrl || fallback.supabaseUrl,
       supabasePublishableKey: runtime.supabasePublishableKey || fallback.supabasePublishableKey,
+      integration: runtime.integration || fallback.integration,
     };
-  } catch {
-    return fallback;
+  } catch (error) {
+    if (['localhost','127.0.0.1','[::1]'].includes(location.hostname)) return fallback;
+    throw new Error('운영 연결 설정을 불러오지 못했습니다. 새로고침해 주세요.');
   }
 }
 
@@ -250,9 +258,16 @@ async function initSupabase(config) {
 async function init() {
   if (initialized) return state();
   const config = await fetchRuntimeConfig();
+  integration = integrationSettings(config.integration);
+  if (integration.enabled) publicIntegration = createPublicIntegrationAdapter(config.integration);
   if (config.supabaseUrl && config.supabasePublishableKey) {
     try {
       await initSupabase(config);
+      if (integration.enabled) legacyIntegration = createLegacyIntegrationAdapter(async () => {
+        const { data, error } = await supabase.auth.getSession();
+        if (error) throw error;
+        return data.session?.access_token || null;
+      });
       mode = 'supabase';
     } catch (error) {
       configError = `Supabase 클라이언트 연결 실패: ${error?.message || '알 수 없는 오류'}`;
@@ -279,11 +294,13 @@ function state() {
     isDemo: mode !== 'supabase',
     isSupabase: mode === 'supabase',
     configError,
+    integration,
   };
 }
 
 async function getAreas() {
   await init();
+  if (integration.enabled) return scopedList('areas');
   if (mode !== 'supabase') return deepClone(loadDemoStore().areas).sort((a, b) => a.sort_order - b.sort_order);
   const { data, error } = await supabase.from('areas').select('*').eq('active', true).order('sort_order');
   if (error) throw error;
@@ -294,6 +311,7 @@ async function getInspections({ start, end } = {}) {
   await init();
   const range = normalizeDateRange(start, end);
   if (range.empty) return [];
+  if (integration.enabled) return scopedList('inspections', range);
   if (mode !== 'supabase') {
     return deepClone(demoFilterDate(loadDemoStore().inspections, 'inspection_date', range.start, range.end));
   }
@@ -310,6 +328,7 @@ async function getInspections({ start, end } = {}) {
 
 async function upsertInspection(payload) {
   await init();
+  if (integration.enabled) return scopedSave('inspections', payload);
   const record = {
     inspection_date: assertOperationalDate(payload.inspection_date, '점검일'),
     period: payload.period,
@@ -346,6 +365,7 @@ async function upsertInspection(payload) {
 
 async function deleteInspection(id) {
   await init();
+  if (integration.enabled) throw new Error('기록 영구삭제는 허용되지 않습니다. 본사에 문의해 주세요.');
   if (mode !== 'supabase') {
     const store = loadDemoStore();
     store.inspections = store.inspections.filter((item) => item.id !== id);
@@ -360,6 +380,7 @@ async function getIssues({ start, end, category } = {}) {
   await init();
   const range = normalizeDateRange(start, end);
   if (range.empty) return [];
+  if (integration.enabled) { const items = await scopedList('issues', range); return category ? items.filter(row => row.category === category) : items; }
   if (mode !== 'supabase') {
     let items = demoFilterDate(loadDemoStore().issues, 'received_date', range.start, range.end);
     if (category) items = items.filter((item) => item.category === category);
@@ -380,6 +401,7 @@ async function getIssues({ start, end, category } = {}) {
 
 async function saveIssue(payload) {
   await init();
+  if (integration.enabled) return scopedSave('issues', payload);
   const record = {
     category: payload.category || 'other',
     area_id: payload.area_id ? Number(payload.area_id) : null,
@@ -425,6 +447,7 @@ async function saveIssue(payload) {
 
 async function deleteIssue(id) {
   await init();
+  if (integration.enabled) throw new Error('기록 영구삭제는 허용되지 않습니다. 본사에 문의해 주세요.');
   if (mode !== 'supabase') {
     const store = loadDemoStore();
     store.issues = store.issues.filter((item) => item.id !== id);
@@ -439,6 +462,7 @@ async function getInventories({ start, end } = {}) {
   await init();
   const range = normalizeDateRange(start, end);
   if (range.empty) return [];
+  if (integration.enabled) return scopedList('inventories', range);
   if (mode !== 'supabase') {
     return deepClone(demoFilterDate(loadDemoStore().inventories, 'record_date', range.start, range.end))
       .sort((a, b) => `${b.record_date}${b.created_at}`.localeCompare(`${a.record_date}${a.created_at}`));
@@ -456,6 +480,7 @@ async function getInventories({ start, end } = {}) {
 
 async function saveInventory(payload) {
   await init();
+  if (integration.enabled) return scopedSave('inventories', payload);
   const record = {
     record_date: assertOperationalDate(payload.record_date, '기준일'),
     area_id: payload.area_id ? Number(payload.area_id) : null,
@@ -495,6 +520,7 @@ async function saveInventory(payload) {
 
 async function deleteInventory(id) {
   await init();
+  if (integration.enabled) throw new Error('기록 영구삭제는 허용되지 않습니다. 본사에 문의해 주세요.');
   if (mode !== 'supabase') {
     const store = loadDemoStore();
     store.inventories = store.inventories.filter((item) => item.id !== id);
@@ -509,6 +535,7 @@ async function getHeadOfficeChecks({ start, end } = {}) {
   await init();
   const range = normalizeDateRange(start, end);
   if (range.empty) return [];
+  if (integration.enabled) return scopedList('head_office_checks', range);
   if (mode !== 'supabase') {
     return deepClone(demoFilterDate(loadDemoStore().headOfficeChecks, 'check_date', range.start, range.end))
       .sort((a, b) => `${b.check_date}${b.created_at}`.localeCompare(`${a.check_date}${a.created_at}`));
@@ -526,6 +553,7 @@ async function getHeadOfficeChecks({ start, end } = {}) {
 
 async function saveHeadOfficeCheck(payload) {
   await init();
+  if (integration.enabled) return scopedSave('head_office_checks', payload);
   const record = {
     check_date: assertOperationalDate(payload.check_date, '점검일'),
     check_type: payload.check_type === 'written' ? 'written' : 'onsite',
@@ -566,6 +594,7 @@ async function saveHeadOfficeCheck(payload) {
 
 async function deleteHeadOfficeCheck(id) {
   await init();
+  if (integration.enabled) throw new Error('기록 영구삭제는 허용되지 않습니다. 본사에 문의해 주세요.');
   if (mode !== 'supabase') {
     const store = loadDemoStore();
     store.headOfficeChecks = store.headOfficeChecks.filter((item) => item.id !== id);
@@ -580,6 +609,11 @@ async function uploadPhotos(files) {
   await init();
   const selected = Array.from(files || []).slice(0, 3);
   if (!selected.length) return [];
+  if (integration.enabled) {
+    if (!isAdminRoute() || !legacyIntegration) throw new Error('관리자 로그인이 필요합니다.');
+    const { encodeGuestPhoto } = await import('./member-client.js');
+    return legacyIntegration.stagePhotos(selected, encodeGuestPhoto);
+  }
   for (const file of selected) {
     if (!file.type.startsWith('image/')) throw new Error('이미지 파일만 첨부할 수 있습니다.');
     if (file.size > 5 * 1024 * 1024) throw new Error('사진 한 장의 용량은 5MB 이하로 선택해 주세요.');
@@ -609,6 +643,7 @@ async function uploadPhotos(files) {
 
 function resolvePhotoUrl(path) {
   if (!path) return '';
+  if (integration.enabled) return isAdminRoute() ? '' : publicIntegration.photoUrl(path);
   if (String(path).startsWith('data:') || String(path).startsWith('http')) return path;
   if (!supabase) return '';
   return supabase.storage.from(PHOTO_BUCKET).getPublicUrl(path).data.publicUrl;
@@ -633,6 +668,8 @@ async function enterDemoAdmin() {
 
 async function signOut() {
   await init();
+  legacyIntegration?.clear();
+  for (const stop of integrationListeners) stop();
   if (mode !== 'supabase') {
     storageRemove(DEMO_ADMIN_KEY);
     return;
@@ -666,10 +703,24 @@ async function getAdminProfile() {
     .maybeSingle();
   if (error) throw error;
   if (!data?.active) return null;
+  if (integration.enabled && legacyIntegration) {
+    const scoped = await legacyIntegration.request('session');
+    if (scoped.siteId !== integration.siteId) throw new Error('관리자에게 연결된 단지와 이 주소의 단지가 일치하지 않습니다.');
+    return { ...data, email: session.user.email, siteName: scoped.siteName };
+  }
   return { ...data, email: session.user.email };
 }
 
 function subscribe(callback) {
+  if (integration.enabled) {
+    const handler = () => callback({ table: 'operations', status: 'POLLING' });
+    const timer = window.setInterval(handler, 30000);
+    const stop = () => { window.clearInterval(timer); window.removeEventListener('onesports-integration-change', handler); integrationListeners.delete(stop); };
+    integrationListeners.add(stop);
+    window.addEventListener('onesports-integration-change', handler);
+    queueMicrotask(() => callback({ table: 'connection', status: 'POLLING' }));
+    return stop;
+  }
   if (mode === 'supabase' && supabase) {
     const channel = supabase
       .channel(`onesports-management-${uuid()}`)
@@ -723,4 +774,50 @@ export const data = {
   getSession,
   getAdminProfile,
   subscribe,
+  photoMarkup,
+  photoGallery,
+  hydratePhotos,
+  async getPhotoReferences(resource, id) { return legacyIntegration ? legacyIntegration.photoReferences(resource,id) : []; },
 };
+
+async function scopedList(resource, range = {}) {
+  const filters = Object.fromEntries(['start','end'].filter(key=>range[key]).map(key=>[key,range[key]]));
+  if (isAdminRoute()) {
+    if (!legacyIntegration) throw new Error('관리자 연결을 확인해 주세요.');
+    return legacyIntegration.list(resource, filters);
+  }
+  return publicIntegration.list(resource, filters);
+}
+async function scopedSave(resource,payload) {
+  if (!isAdminRoute() || !legacyIntegration) throw new Error('관리자 로그인이 필요합니다.');
+  const record = await legacyIntegration.save(resource,payload);
+  window.dispatchEvent(new CustomEvent('onesports-integration-change'));
+  return record;
+}
+function photoMarkup(path,alt='사진') {
+  if (integration.enabled && isAdminRoute()) return `<a class="photo-thumb" data-private-photo-link><img data-private-photo="${escapeHtml(path)}" alt="${escapeHtml(alt)} · 불러오는 중" /></a>`;
+  const url=resolvePhotoUrl(path);return url?`<a class="photo-thumb" href="${escapeHtml(url)}" target="_blank" rel="noopener"><img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" /></a>`:'';
+}
+function photoGallery(resource,record,alt='사진') {
+  if (integration.enabled && isAdminRoute()) return `<div data-private-gallery="${escapeHtml(resource)}" data-record-id="${escapeHtml(record.id)}"><button type="button" class="soft-button" data-open-private-gallery>사진·첨부 확인</button><div class="photo-strip" data-gallery-content></div></div>`;
+  return `<div class="photo-strip">${safeArray(record.photo_paths).map(path=>photoMarkup(path,alt)).join('')}</div>`;
+}
+function hydratePhotos(root=document) {
+  if (!integration.enabled || !legacyIntegration || !isAdminRoute()) return;
+  for (const img of root.querySelectorAll('[data-private-photo]')) {
+    if(img.dataset.photoLoading)continue;img.dataset.photoLoading='true';
+    legacyIntegration.photoUrl(img.dataset.privatePhoto).then(url=>{
+      if(!img.isConnected)return;img.src=url;img.alt=img.alt.replace(' · 불러오는 중','');
+      const link=img.closest('[data-private-photo-link]');if(link){link.href=url;link.target='_blank';link.rel='noopener';}
+    }).catch(()=>{if(img.isConnected)img.alt='사진을 불러오지 못했습니다. 다시 열어 주세요.';});
+  }
+  for(const gallery of root.querySelectorAll('[data-private-gallery]')){
+    const button=gallery.querySelector('[data-open-private-gallery]');if(!button||button.dataset.bound)continue;button.dataset.bound='true';
+    button.addEventListener('click',async()=>{
+      button.disabled=true;button.textContent='사진 불러오는 중…';
+      try{const refs=await legacyIntegration.photoReferences(gallery.dataset.privateGallery,gallery.dataset.recordId);const content=gallery.querySelector('[data-gallery-content]');content.innerHTML=refs.length?refs.map(ref=>photoMarkup(ref)).join(''):'등록된 사진이 없습니다.';hydratePhotos(content);button.textContent='사진 새로고침';}
+      catch(error){button.textContent=error.message||'다시 시도';}finally{button.disabled=false;}
+    });
+  }
+}
+window.addEventListener('pagehide',()=>{legacyIntegration?.clear();for(const stop of integrationListeners)stop();});

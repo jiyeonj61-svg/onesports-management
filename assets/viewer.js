@@ -641,6 +641,9 @@ async function bootstrap() {
       if (event.status === 'SUBSCRIBED') {
         live.className = 'live-indicator connected';
         live.querySelector('span').textContent = '실시간 연결됨';
+      } else if (event.status === 'POLLING') {
+        live.className = 'live-indicator connected';
+        live.querySelector('span').textContent = '30초 자동 새로고침';
       } else if (event.status === 'DEMO') {
         live.className = 'live-indicator demo';
         live.querySelector('span').textContent = '데모 모드';

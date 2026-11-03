@@ -5,3 +5,6 @@ tests
 scripts
 node_modules
 preview
+supabase
+docs
+integration.env.example

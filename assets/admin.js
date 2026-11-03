@@ -46,6 +46,7 @@ const state = {
   issuePhotos: [],
   inventoryPhotos: [],
   headOfficeCheckPhotos: [],
+  editVersions: {},
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -85,6 +86,7 @@ function showAdminShell() {
   $('#loginScreen').classList.add('hidden');
   $('#adminApp').classList.remove('hidden');
   $('#adminName').textContent = state.profile.display_name || '관리자';
+  if(state.profile.siteName) $('.admin-intro h1').textContent=state.profile.siteName+' 관리업무';
   $('#adminEmail').textContent = state.profile.email || '';
   const badge = $('#adminModeBadge');
   if (state.connection.isDemo) {
@@ -187,10 +189,11 @@ async function loadDay() {
 
 function renderPhotoPreview(container, paths, onRemove) {
   container.innerHTML = paths.map((path, index) => {
-    const url = data.resolvePhotoUrl(path);
-    return `<div class="photo-preview-item"><img src="${escapeHtml(url)}" alt="첨부 사진" /><button class="photo-remove" type="button" data-remove-photo="${index}" aria-label="사진 삭제">×</button></div>`;
+    const preserved=state.connection.integration?.enabled && !String(path).startsWith('pending:');
+    return `<div class="photo-preview-item">${data.photoMarkup(path,'첨부 사진')}${preserved?'':`<button class="photo-remove" type="button" data-remove-photo="${index}" aria-label="사진 선택 취소">×</button>`}</div>`;
   }).join('');
   $$('[data-remove-photo]', container).forEach((button) => button.addEventListener('click', () => onRemove(Number(button.dataset.removePhoto))));
+  data.hydratePhotos(container);
 }
 
 function buildChecklistRow(item, checked, status) {
@@ -223,11 +226,13 @@ function openInspectionEditor(areaId, period) {
   $('#inspectionNote').value = existing?.note || '';
   $('#inspectionPhotos').value = '';
   state.inspectionPhotos = [...safeArray(existing?.photo_paths)];
+  state.editVersions.inspections=existing?.updated_at;
   const checked = new Set(existing ? safeArray(existing.checked_items) : safeArray(area.checklist));
   const itemStatuses = existing?.item_statuses || {};
   $('#inspectionChecklist').innerHTML = safeArray(area.checklist).map((item) => buildChecklistRow(item, checked.has(item), itemStatuses[item] || (checked.has(item) ? 'normal' : 'unchecked'))).join('');
   refreshInspectionPhotos();
-  $('#deleteInspectionButton').classList.toggle('hidden', !existing);
+  loadIntegrationPhotos('inspections',existing,'inspectionPhotos','inspectionId',refreshInspectionPhotos);
+  $('#deleteInspectionButton').classList.toggle('hidden', !existing || state.connection.integration?.enabled);
   openModal($('#inspectionModal'));
 }
 
@@ -249,6 +254,8 @@ async function saveInspection(event) {
     const checkedItems = $$('input[name="inspection-check"]:checked').map((input) => input.value);
     const itemStatuses = Object.fromEntries($$('[data-item-status]').map((select) => [select.dataset.itemStatus, select.value]));
     await data.upsertInspection({
+      id: $('#inspectionId').value || undefined,
+      expected_updated_at: state.editVersions.inspections,
       inspection_date: state.selectedDate,
       period: $('#inspectionPeriod').value,
       area_id: $('#inspectionAreaId').value,
@@ -339,7 +346,7 @@ function issueCardHtml(issue, { editable = true } = {}) {
       <div class="issue-card-body">
         <p>${nl2br(issue.description)}</p>
         ${issue.action_note ? `<div class="issue-action-box"><strong>조치 내용·진행 상황</strong><p>${nl2br(issue.action_note)}</p></div>` : ''}
-        ${photos.length ? `<div class="photo-strip">${photos.map((url) => `<a class="photo-thumb" href="${escapeHtml(url)}" target="_blank" rel="noopener"><img src="${escapeHtml(url)}" alt="증빙 사진" /></a>`).join('')}</div>` : ''}
+        ${data.photoGallery('issues',issue,'증빙 사진')}
       </div>
       <div class="issue-card-footer"><span>담당 ${escapeHtml(issue.manager_name || '-')}</span><span>최종 업데이트 ${escapeHtml(formatDateTime(issue.updated_at))}</span></div>
     </article>
@@ -369,7 +376,7 @@ function headOfficeCheckCardHtml(item, { editable = true } = {}) {
       <div class="issue-card-body">
         <p>${nl2br(item.result)}</p>
         ${item.follow_up ? `<div class="issue-action-box"><strong>후속조치·비고</strong><p>${nl2br(item.follow_up)}</p></div>` : ''}
-        ${photos.length ? `<div class="photo-strip">${photos.map((url) => `<a class="photo-thumb" href="${escapeHtml(url)}" target="_blank" rel="noopener"><img src="${escapeHtml(url)}" alt="본사점검 사진" /></a>`).join('')}</div>` : ''}
+        ${data.photoGallery('head_office_checks',item,'본사점검 사진')}
       </div>
       <div class="issue-card-footer"><span>본사 점검자 ${escapeHtml(item.manager_name || '-')}</span><span>최종 업데이트 ${escapeHtml(formatDateTime(item.updated_at))}</span></div>
     </article>
@@ -400,7 +407,7 @@ function inventoryCardHtml(item, { editable = true } = {}) {
       </div>
       <div class="issue-card-body">
         <p>${item.note ? nl2br(item.note) : '등록된 비고가 없습니다.'}</p>
-        ${photos.length ? `<div class="photo-strip">${photos.map((url) => `<a class="photo-thumb" href="${escapeHtml(url)}" target="_blank" rel="noopener"><img src="${escapeHtml(url)}" alt="시설비품 사진" /></a>`).join('')}</div>` : ''}
+        ${data.photoGallery('inventories',item,'시설비품 사진')}
       </div>
       <div class="issue-card-footer"><span>담당 ${escapeHtml(item.manager_name || '-')}</span><span>최종 업데이트 ${escapeHtml(formatDateTime(item.updated_at))}</span></div>
     </article>
@@ -439,6 +446,7 @@ function renderIssueLists() {
   $('#adminInventoryList').className = state.inventories.length ? 'card-list' : 'card-list empty-state';
   $('#adminInventoryList').innerHTML = state.inventories.length ? state.inventories.map((item) => inventoryCardHtml(item)).join('') : '등록된 시설·비품 현황이 없습니다.';
   bindEditButtons();
+  data.hydratePhotos(document);
 }
 
 async function loadIssues() {
@@ -506,8 +514,10 @@ function openIssueEditor(type, issue = null) {
   $('#issueActionNote').value = issue?.action_note || '';
   $('#issuePhotos').value = '';
   state.issuePhotos = [...safeArray(issue?.photo_paths)];
+  state.editVersions.issues=issue?.updated_at;
   refreshIssuePhotos();
-  $('#deleteIssueButton').classList.toggle('hidden', !issue);
+  loadIntegrationPhotos('issues',issue,'issuePhotos','issueId',refreshIssuePhotos);
+  $('#deleteIssueButton').classList.toggle('hidden', !issue || state.connection.integration?.enabled);
   openModal($('#issueModal'));
 }
 
@@ -521,6 +531,7 @@ async function saveIssue(event) {
     const uploaded = await data.uploadPhotos(selectedFiles);
     await data.saveIssue({
       id: $('#issueId').value || null,
+      expected_updated_at: state.editVersions.issues,
       category: $('#issueCategory').value,
       received_date: $('#issueReceivedDate').value,
       area_id: $('#issueAreaId').value || null,
@@ -587,8 +598,10 @@ function openHeadOfficeCheckEditor(item = null) {
   $('#headOfficeCheckFollowUp').value = item?.follow_up || '';
   $('#headOfficeCheckPhotos').value = '';
   state.headOfficeCheckPhotos = [...safeArray(item?.photo_paths)];
+  state.editVersions.head_office_checks=item?.updated_at;
   refreshHeadOfficeCheckPhotos();
-  $('#deleteHeadOfficeCheckButton').classList.toggle('hidden', !item);
+  loadIntegrationPhotos('head_office_checks',item,'headOfficeCheckPhotos','headOfficeCheckId',refreshHeadOfficeCheckPhotos);
+  $('#deleteHeadOfficeCheckButton').classList.toggle('hidden', !item || state.connection.integration?.enabled);
   openModal($('#headOfficeCheckModal'));
 }
 
@@ -602,6 +615,7 @@ async function saveHeadOfficeCheck(event) {
     const uploaded = await data.uploadPhotos(selectedFiles);
     await data.saveHeadOfficeCheck({
       id: $('#headOfficeCheckId').value || null,
+      expected_updated_at: state.editVersions.head_office_checks,
       check_date: $('#headOfficeCheckDate').value,
       check_type: $('#headOfficeCheckType').value,
       title: $('#headOfficeCheckTitle').value,
@@ -665,8 +679,10 @@ function openInventoryEditor(item = null) {
   $('#inventoryNote').value = item?.note || '';
   $('#inventoryPhotos').value = '';
   state.inventoryPhotos = [...safeArray(item?.photo_paths)];
+  state.editVersions.inventories=item?.updated_at;
   refreshInventoryPhotos();
-  $('#deleteInventoryButton').classList.toggle('hidden', !item);
+  loadIntegrationPhotos('inventories',item,'inventoryPhotos','inventoryId',refreshInventoryPhotos);
+  $('#deleteInventoryButton').classList.toggle('hidden', !item || state.connection.integration?.enabled);
   openModal($('#inventoryModal'));
 }
 
@@ -680,6 +696,7 @@ async function saveInventory(event) {
     const uploaded = await data.uploadPhotos(selectedFiles);
     await data.saveInventory({
       id: $('#inventoryId').value || null,
+      expected_updated_at: state.editVersions.inventories,
       record_date: $('#inventoryRecordDate').value,
       category: $('#inventoryCategory').value,
       area_id: $('#inventoryAreaId').value || null,
@@ -759,6 +776,7 @@ function bindEvents() {
     await data.signOut();
     state.session = null;
     state.profile = null;
+    state.areas=[];state.inspections=[];state.issues=[];state.inventories=[];state.headOfficeChecks=[];state.editVersions={};appStarted=false;
     showLogin();
   });
 
@@ -855,6 +873,9 @@ async function startAdminApp() {
       if (event.status === 'SUBSCRIBED') {
         indicator.className = 'live-indicator dark connected';
         indicator.querySelector('span').textContent = '실시간 연결됨';
+      } else if (event.status === 'POLLING') {
+        indicator.className = 'live-indicator dark connected';
+        indicator.querySelector('span').textContent = '30초 자동 새로고침';
       } else if (event.status === 'DEMO') {
         indicator.className = 'live-indicator dark demo';
         indicator.querySelector('span').textContent = '데모 모드';
@@ -873,6 +894,11 @@ async function bootstrap() {
   bindEvents();
   state.connection = await data.init();
   renderMode(state.connection);
+  if(state.connection.integration?.enabled){
+    const banner=$('#setupBanner');banner.classList.remove('hidden');
+    banner.textContent='이 단지의 관리 기록은 통합 시스템과 연결되어 있습니다. 기존 관리자 권한은 이 단지에만 적용됩니다.';
+    const link=document.createElement('a');link.href=state.connection.integration.hqUrl;link.textContent=' 본사 통합 화면';link.className='viewer-return';banner.append(link);
+  }
   document.documentElement.dataset.appReady = 'true';
   const authorized = await authorizeCurrentSession();
   if (authorized) await startAdminApp();
@@ -883,3 +909,10 @@ bootstrap().catch((error) => {
   document.documentElement.dataset.appReady = 'error';
   showLogin(`초기화 중 오류가 발생했습니다: ${error.message || '알 수 없는 오류'}`);
 });
+
+function loadIntegrationPhotos(resource,record,stateKey,inputId,refresh){
+ if(!state.connection.integration?.enabled||!record)return;
+ data.getPhotoReferences(resource,record.id).then(refs=>{
+  if($('#'+inputId).value!==String(record.id))return;state[stateKey]=refs;refresh();
+ }).catch(error=>showToast(error.message||'기존 사진을 확인하지 못했습니다.','error'));
+}

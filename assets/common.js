@@ -79,10 +79,10 @@ export const PERIOD_META = {
 };
 
 export function localISODate(date = new Date()) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year:'numeric', month:'2-digit', day:'2-digit' }).format(date);
+}
+function calendarISODate(date) {
+  return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
 }
 
 export function appCurrentDate() {
@@ -120,26 +120,25 @@ export function parseLocalDate(value) {
 export function addDays(value, amount) {
   const date = parseLocalDate(value);
   date.setDate(date.getDate() + amount);
-  return localISODate(date);
+  return calendarISODate(date);
 }
 
 export function monthKey(value = new Date()) {
-  const date = value instanceof Date ? value : parseLocalDate(`${String(value).slice(0, 7)}-01`);
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+  return value instanceof Date ? localISODate(value).slice(0,7) : String(value).slice(0,7);
 }
 
 export function shiftMonth(value, amount) {
   const date = value instanceof Date ? new Date(value) : parseLocalDate(`${String(value).slice(0, 7)}-01`);
   date.setDate(1);
   date.setMonth(date.getMonth() + amount);
-  return monthKey(date);
+  return calendarISODate(date).slice(0,7);
 }
 
 export function monthRange(value) {
   const date = parseLocalDate(`${String(value).slice(0, 7)}-01`);
-  const start = localISODate(date);
+  const start = calendarISODate(date);
   const endDate = new Date(date.getFullYear(), date.getMonth() + 1, 0);
-  return { start, end: localISODate(endDate), days: endDate.getDate() };
+  return { start, end: calendarISODate(endDate), days: endDate.getDate() };
 }
 
 export function formatKoreanDate(value, options = {}) {
@@ -165,6 +164,7 @@ export function formatDateTime(value) {
   if (Number.isNaN(date.getTime())) return '-';
   return new Intl.DateTimeFormat('ko-KR', {
     year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+    timeZone: 'Asia/Seoul',
   }).format(date);
 }
 

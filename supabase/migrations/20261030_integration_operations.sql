@@ -32,8 +32,8 @@ create or replace function public.osi_preserve_mapping_metadata() returns trigge
 language plpgsql set search_path=pg_catalog,public as $trigger$
 begin
  if old.integration_site_id is null and new.integration_site_id is not null and new.integration_legacy_record
-  and (to_jsonb(old)-'integration_site_id'-'integration_legacy_record'-'updated_at'-'updated_by'-'completed_at')=
-      (to_jsonb(new)-'integration_site_id'-'integration_legacy_record'-'updated_at'-'updated_by'-'completed_at') then
+  and (to_jsonb(old)-'integration_site_id'-'integration_legacy_record'-'integration_is_public'-'updated_at'-'updated_by'-'completed_at')=
+      (to_jsonb(new)-'integration_site_id'-'integration_legacy_record'-'integration_is_public'-'updated_at'-'updated_by'-'completed_at') then
   new:=jsonb_populate_record(new,jsonb_build_object('updated_at',to_jsonb(old)->'updated_at','updated_by',to_jsonb(old)->'updated_by','completed_at',to_jsonb(old)->'completed_at'));
  end if;
  return new;
@@ -79,6 +79,8 @@ create table if not exists public.osi_legacy_mappings (
  row_sha256 text not null, evidence text not null, approved_by uuid not null,
  mapped_at timestamptz not null default now(), primary key(resource,record_id)
 );
+alter table public.osi_legacy_mappings add column if not exists was_public boolean;
+alter table public.osi_legacy_mappings add column if not exists visibility_evidence text;
 alter table public.osi_operation_audit enable row level security;
 alter table public.osi_operation_requests enable row level security;
 alter table public.osi_legacy_mappings enable row level security;
@@ -106,7 +108,7 @@ begin
     p_action not in ('list','get','public_list','summary','create','update','delete') then
   raise exception 'Unsupported operation' using errcode='22023';
  end if;
- if actor_type not in ('HQ_ADMIN','SITE_STAFF','server') or length(coalesce(actor_id,''))>128 then raise exception 'Invalid actor' using errcode='22023'; end if;
+ if actor_type not in ('HQ_ADMIN','SITE_ADMIN','SITE_STAFF','server') or length(coalesce(actor_id,''))>128 then raise exception 'Invalid actor' using errcode='22023'; end if;
  if p_action='summary' then
   if p_resource<>'inspections' or exists(select 1 from jsonb_object_keys(p_payload) k where k not in ('start','end')) then raise exception 'Summary requires inspections and only start/end filters' using errcode='22023'; end if;
   period_start:=coalesce((p_payload->>'start')::date,today); period_end:=coalesce((p_payload->>'end')::date,today);
@@ -146,9 +148,11 @@ begin
  end case;
 
  if p_action in ('list','get','public_list') then
-  allowed:=array['id','start','end','search','limit','offset'];
+  allowed:=array['id','start','end','search','status','limit','offset'];
   if exists(select 1 from jsonb_object_keys(p_payload) k where not(k=any(allowed))) then raise exception 'Unexpected query field' using errcode='22023'; end if;
   if length(coalesce(p_payload->>'search',''))>120 then raise exception 'Search too long' using errcode='22023'; end if;
+  if p_payload ? 'status' and p_resource not in ('inspections','issues','inventories') then raise exception 'Status filter unsupported for resource' using errcode='22023'; end if;
+  if p_payload ? 'status' and length(coalesce(p_payload->>'status',''))>30 then raise exception 'Invalid status filter' using errcode='22023'; end if;
   page_limit:=least(200,greatest(1,coalesce((p_payload->>'limit')::integer,100)));
   page_offset:=greatest(0,coalesce((p_payload->>'offset')::integer,0));
   if page_offset>100000 then raise exception 'Offset too large' using errcode='22023'; end if;
@@ -159,19 +163,22 @@ begin
   if p_action='public_list' then
    select string_agg(format('%L,to_jsonb(t)->%L',f,f),',') into projection from unnest(public_fields) f;
    projection:='jsonb_build_object('||projection||')';
+   if p_resource<>'areas' then
+    projection:=projection||' || jsonb_build_object(''legacy_photo_count'',case when t.integration_legacy_record then cardinality(t.photo_paths) else 0 end)';
+   end if;
   else
    select string_agg(format('%L,to_jsonb(t)->%L',case when f='integration_is_public' then 'is_public' else f end,f),',')
     into projection from unnest(array['id','integration_site_id','integration_legacy_record','created_at','updated_at']||fields||case when p_resource='areas' then array['slug'] else array['photo_paths'] end) f;
    projection:='jsonb_build_object('||projection||')';
   end if;
-  query_filter:=format('where integration_site_id=$1 and ($2::text is null or id::text=$2) %s %s and ($5::text is null or to_jsonb(t)->>''title'' ilike ''%%''||$5||''%%'' or to_jsonb(t)->>''name'' ilike ''%%''||$5||''%%'')',
+  query_filter:=format('where integration_site_id=$1 and ($2::text is null or id::text=$2) %s %s and ($5::text is null or to_jsonb(t)->>''title'' ilike ''%%''||$5||''%%'' or to_jsonb(t)->>''name'' ilike ''%%''||$5||''%%'') and ($6::text is null or to_jsonb(t)->>''status''=$6)',
    case when date_field is null then '' else format('and ($3::date is null or %I >= $3::date) and ($4::date is null or %I <= $4::date)',date_field,date_field) end,
    case when p_action<>'public_list' then '' when p_resource='areas' then 'and active=true' else format('and %I=true',public_field) end);
   execute format('select count(*) from public.%I t %s',p_resource,query_filter) into item_count
-   using p_site_id,record_id,p_payload->>'start',p_payload->>'end',nullif(p_payload->>'search','');
-  execute format('select coalesce(jsonb_agg(q.item),''[]''::jsonb) from (select %s item from public.%I t %s order by %s,id limit $6 offset $7) q',
+   using p_site_id,record_id,p_payload->>'start',p_payload->>'end',nullif(p_payload->>'search',''),nullif(p_payload->>'status','');
+  execute format('select coalesce(jsonb_agg(q.item),''[]''::jsonb) from (select %s item from public.%I t %s order by %s,id limit $7 offset $8) q',
    projection,p_resource,query_filter,case when date_field is null then 'sort_order' else quote_ident(date_field)||' desc' end)
-   into result_items using p_site_id,record_id,p_payload->>'start',p_payload->>'end',nullif(p_payload->>'search',''),page_limit,page_offset;
+   into result_items using p_site_id,record_id,p_payload->>'start',p_payload->>'end',nullif(p_payload->>'search',''),nullif(p_payload->>'status',''),page_limit,page_offset;
   if p_action='get' then
    if jsonb_array_length(result_items)=0 then raise exception 'Record not found' using errcode='P0002'; end if;
    return jsonb_build_object('ok',true,'item',result_items->0);
@@ -182,6 +189,7 @@ begin
  -- Callers must additionally restrict capabilities by current role. Never accept
  -- actor/site scope directly from a browser: this RPC is service-role only.
  allowed:=fields||array['id','request_id','actor_type','actor_id','is_public'];
+ if p_action='update' then allowed:=allowed||array['expected_updated_at']; end if;
  if p_action='delete' then allowed:=array['id','actor_type','actor_id']; end if;
  if exists(select 1 from jsonb_object_keys(p_payload) k where not(k=any(allowed))) then raise exception 'Unexpected write field' using errcode='22023'; end if;
  if p_action in ('update','delete') then
@@ -189,6 +197,10 @@ begin
   execute format('select to_jsonb(t) from public.%I t where integration_site_id=$1 and id::text=$2 for update',p_resource)
    into original using p_site_id,record_id;
   if original is null then raise exception 'Record not found' using errcode='P0002'; end if;
+  if p_action='update' and p_payload ? 'expected_updated_at' and
+     (nullif(p_payload->>'expected_updated_at','') is null or (p_payload->>'expected_updated_at')::timestamptz is distinct from (original->>'updated_at')::timestamptz) then
+   raise exception 'Record changed; reload before editing' using errcode='40001';
+  end if;
  end if;
  if p_action='delete' then
   execute format('delete from public.%I where integration_site_id=$1 and id::text=$2',p_resource) using p_site_id,record_id;
@@ -217,7 +229,7 @@ begin
   end case;
  else d:=original;
  end if;
- d:=d||(p_payload-'id'-'request_id'-'actor_type'-'actor_id');
+ d:=d||(p_payload-'id'-'request_id'-'actor_type'-'actor_id'-'expected_updated_at');
  if p_resource in ('inspections','head_office_checks') and p_payload ? 'is_public' then d:=d||jsonb_build_object('integration_is_public',(p_payload->>'is_public')::boolean); end if;
  if date_field is not null and ((d->>date_field)::date < date '2026-09-01' or (d->>date_field)::date>today or nullif(d->>date_field,'') is null) then raise exception 'Date outside supported operational period' using errcode='22023'; end if;
  if p_resource<>'areas' and length(coalesce(d->>'manager_name',''))>100 then raise exception 'Manager name too long' using errcode='22023'; end if;
@@ -264,7 +276,7 @@ create or replace function public.integration_map_legacy_records(
 ) returns jsonb language plpgsql security definer
 set search_path=pg_catalog,public,extensions
 as $mapping$
-declare entry jsonb; tab text; ident text; row_value jsonb; mapped_row jsonb; row_hash text; prior public.osi_legacy_mappings%rowtype; mapped integer:=0;
+declare entry jsonb; tab text; ident text; row_value jsonb; mapped_row jsonb; row_hash text; prior public.osi_legacy_mappings%rowtype; mapped integer:=0; approved_public boolean;
 begin
  if p_site_id is null or p_approved_by is null or not exists(select 1 from auth.users where id=p_approved_by) or length(trim(coalesce(p_evidence,'')))<10 then raise exception 'Explicit operator identity and mapping evidence required'; end if;
  if jsonb_typeof(p_manifest)<>'array' or jsonb_array_length(p_manifest) not between 1 and 1000 then raise exception 'Manifest must contain 1-1000 reviewed records'; end if;
@@ -273,20 +285,24 @@ begin
  for entry in select value from jsonb_array_elements(p_manifest) loop
   tab:=entry->>'resource'; ident:=entry->>'id';
   if tab not in ('areas','inspections','issues','inventories','head_office_checks') or ident is null or entry->>'sha256' !~ '^[a-f0-9]{64}$' then raise exception 'Invalid manifest entry'; end if;
+  if tab in ('inspections','head_office_checks') and (jsonb_typeof(entry->'was_public') is distinct from 'boolean' or length(trim(coalesce(entry->>'visibility_evidence','')))<10) then raise exception 'Explicit reviewed historical visibility required'; end if;
+  approved_public:=case when tab in ('inspections','head_office_checks') then (entry->>'was_public')::boolean else null end;
   select * into prior from public.osi_legacy_mappings where resource=tab and record_id=ident;
   if found then
-   if prior.site_id<>p_site_id or prior.row_sha256<>entry->>'sha256' then raise exception 'Record already mapped differently'; end if;
+   if prior.site_id<>p_site_id or prior.row_sha256<>entry->>'sha256' or prior.was_public is distinct from approved_public then raise exception 'Record already mapped differently'; end if;
    continue;
   end if;
   execute format('select to_jsonb(t) from public.%I t where id::text=$1 for update',tab) into row_value using ident;
   if row_value is null or row_value->>'integration_site_id' is not null then raise exception 'Unmapped legacy record not found'; end if;
   row_hash:=encode(digest(convert_to((row_value-'integration_site_id'-'integration_legacy_record'-'integration_is_public')::text,'UTF8'),'sha256'),'hex');
   if row_hash<>entry->>'sha256' then raise exception 'Record changed since mapping review'; end if;
+  if approved_public and coalesce((row_value->>case when tab='inspections' then 'inspection_date' else 'check_date' end)::date,date '1900-01-01')<date '2026-09-01' then raise exception 'Historical public date predicate not satisfied'; end if;
+  if tab in ('issues','inventories') and entry ? 'was_public' and (entry->>'was_public')::boolean is distinct from (row_value->>'is_public')::boolean then raise exception 'Existing public flag must not change during mapping'; end if;
   if tab in ('inspections','issues','inventories') and row_value->>'area_id' is not null and not exists(select 1 from public.areas where id=(row_value->>'area_id')::bigint and integration_site_id=p_site_id) then raise exception 'Map the verified area first'; end if;
-  execute format('update public.%I t set integration_site_id=$1,integration_legacy_record=true where id::text=$2 returning to_jsonb(t.*)',tab) into mapped_row using p_site_id,ident;
-  if (row_value-'integration_site_id'-'integration_legacy_record')<>(mapped_row-'integration_site_id'-'integration_legacy_record') then raise exception 'Legacy trigger unexpectedly changed business data; mapping aborted'; end if;
-  insert into public.osi_legacy_mappings(resource,record_id,site_id,row_sha256,evidence,approved_by) values(tab,ident,p_site_id,row_hash,p_evidence,p_approved_by);
-  insert into public.osi_operation_audit(site_id,resource,record_id,action,actor_type,actor_id) values(p_site_id,tab,ident,'legacy_mapping','HQ_ADMIN',p_approved_by::text);
+  execute format('update public.%I t set integration_site_id=$1,integration_legacy_record=true %s where id::text=$2 returning to_jsonb(t.*)',tab,case when tab in ('inspections','head_office_checks') then ',integration_is_public=$3' else '' end) into mapped_row using p_site_id,ident,approved_public;
+  if (row_value-'integration_site_id'-'integration_legacy_record'-'integration_is_public')<>(mapped_row-'integration_site_id'-'integration_legacy_record'-'integration_is_public') then raise exception 'Legacy trigger unexpectedly changed business data; mapping aborted'; end if;
+  insert into public.osi_legacy_mappings(resource,record_id,site_id,row_sha256,evidence,approved_by,was_public,visibility_evidence) values(tab,ident,p_site_id,row_hash,p_evidence,p_approved_by,approved_public,entry->>'visibility_evidence');
+  insert into public.osi_operation_audit(site_id,resource,record_id,action,actor_type,actor_id) values(p_site_id,tab,ident,'legacy_mapping','MIGRATION_OPERATOR',p_approved_by::text);
   mapped:=mapped+1;
  end loop;
  return jsonb_build_object('ok',true,'mapped',mapped);
