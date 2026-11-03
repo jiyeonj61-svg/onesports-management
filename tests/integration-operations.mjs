@@ -135,6 +135,22 @@ try{
  });
  await check('mapping API is not granted even to service_role',async()=>{
   await assert.rejects(asRole('service_role',()=>sql.query('select public.integration_map_legacy_records($1,$2,$3,$4)',[A,'[]','Test mapping evidence',ADMIN])),/permission denied/);
+  await assert.rejects(asRole('service_role',()=>sql.query('select public.integration_map_legacy_records($1,$2,$3,$4,$5)',[A,'[]','Test mapping evidence',ADMIN,'better-auth'])),/permission denied/);
+ });
+ await check('external deployment approver is namespaced without inventing a Supabase user',async()=>{
+  const owner=randomUUID();
+  const row=(await sql.query("insert into areas(name,slug,sort_order) values('Reviewed external approver area','external-approver-test',900) returning id")).rows[0];
+  const hash=(await sql.query("select encode(extensions.digest(convert_to((to_jsonb(t)-'integration_site_id'-'integration_legacy_record'-'integration_is_public')::text,'UTF8'),'sha256'),'hex') h from areas t where id=$1",[row.id])).rows[0].h;
+  const manifest=JSON.stringify([{resource:'areas',id:String(row.id),sha256:hash}]);
+  const map=namespace=>sql.query('select integration_map_legacy_records($1,$2::jsonb,$3,$4,$5)',[A,manifest,'Verified isolated Better Auth deployment owner evidence',owner,namespace]);
+  await assert.rejects(map('supabase-auth'),/Verified Supabase/);
+  await assert.rejects(map('unverified-provider'),/namespace/);
+  await assert.rejects(map(null),/namespace/);
+  await map('better-auth');
+  const ledger=(await sql.query('select approved_by,approved_by_system from osi_legacy_mappings where resource=$1 and record_id=$2',['areas',String(row.id)])).rows[0];
+  assert.deepEqual(ledger,{approved_by:owner,approved_by_system:'better-auth'});
+  assert.equal((await sql.query('select actor_id from osi_operation_audit where action=$1 and record_id=$2',['legacy_mapping',String(row.id)])).rows[0].actor_id,`better-auth:${owner}`);
+  assert.equal((await sql.query('select count(*)::int n from auth.users where id=$1',[owner])).rows[0].n,0);
  });
  await check('explicit manifest checks fingerprint, relationship and atomic retry',async()=>{
   const digest=async(resource,id)=>(await sql.query(`select encode(extensions.digest(convert_to((to_jsonb(t)-'integration_site_id'-'integration_legacy_record'-'integration_is_public')::text,'UTF8'),'sha256'),'hex') h from public.${resource} t where id::text=$1`,[String(id)])).rows[0].h;

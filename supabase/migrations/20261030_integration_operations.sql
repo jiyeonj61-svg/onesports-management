@@ -81,6 +81,7 @@ create table if not exists public.osi_legacy_mappings (
 );
 alter table public.osi_legacy_mappings add column if not exists was_public boolean;
 alter table public.osi_legacy_mappings add column if not exists visibility_evidence text;
+alter table public.osi_legacy_mappings add column if not exists approved_by_system text not null default 'supabase-auth' check (approved_by_system in ('supabase-auth','better-auth'));
 alter table public.osi_operation_audit enable row level security;
 alter table public.osi_operation_requests enable row level security;
 alter table public.osi_legacy_mappings enable row level security;
@@ -271,14 +272,20 @@ grant execute on function public.integration_operations(uuid,text,text,jsonb) to
 
 -- Operator-only explicit mapping. Produce hashes from a private, reviewed
 -- backup/export; never copy row contents into source control or test fixtures.
+-- Remove the previous signature so four-argument calls resolve to the defaulted
+-- namespace below instead of retaining a second, divergent implementation.
+drop function if exists public.integration_map_legacy_records(uuid,jsonb,text,uuid);
 create or replace function public.integration_map_legacy_records(
- p_site_id uuid,p_manifest jsonb,p_evidence text,p_approved_by uuid
+ p_site_id uuid,p_manifest jsonb,p_evidence text,p_approved_by uuid,p_approved_by_system text default 'supabase-auth'
 ) returns jsonb language plpgsql security definer
 set search_path=pg_catalog,public,extensions
 as $mapping$
 declare entry jsonb; tab text; ident text; row_value jsonb; mapped_row jsonb; row_hash text; prior public.osi_legacy_mappings%rowtype; mapped integer:=0; approved_public boolean;
 begin
- if p_site_id is null or p_approved_by is null or not exists(select 1 from auth.users where id=p_approved_by) or length(trim(coalesce(p_evidence,'')))<10 then raise exception 'Explicit operator identity and mapping evidence required'; end if;
+ if p_site_id is null or p_approved_by is null or p_approved_by_system is null or p_approved_by_system not in ('supabase-auth','better-auth') or length(trim(coalesce(p_evidence,'')))<10 then raise exception 'Explicit operator identity, namespace and mapping evidence required'; end if;
+ if p_approved_by_system='supabase-auth' and not exists(select 1 from auth.users where id=p_approved_by) then raise exception 'Verified Supabase operator identity required'; end if;
+ -- Better Auth identities are verified against the deployment's D1 user/HQ
+ -- membership evidence by the DB operator; never invent an auth.users entry.
  if jsonb_typeof(p_manifest)<>'array' or jsonb_array_length(p_manifest) not between 1 and 1000 then raise exception 'Manifest must contain 1-1000 reviewed records'; end if;
  -- Areas must be listed before their records. All rows lock and validate in one
  -- transaction; one error aborts the entire manifest without partial mapping.
@@ -301,14 +308,14 @@ begin
   if tab in ('inspections','issues','inventories') and row_value->>'area_id' is not null and not exists(select 1 from public.areas where id=(row_value->>'area_id')::bigint and integration_site_id=p_site_id) then raise exception 'Map the verified area first'; end if;
   execute format('update public.%I t set integration_site_id=$1,integration_legacy_record=true %s where id::text=$2 returning to_jsonb(t.*)',tab,case when tab in ('inspections','head_office_checks') then ',integration_is_public=$3' else '' end) into mapped_row using p_site_id,ident,approved_public;
   if (row_value-'integration_site_id'-'integration_legacy_record'-'integration_is_public')<>(mapped_row-'integration_site_id'-'integration_legacy_record'-'integration_is_public') then raise exception 'Legacy trigger unexpectedly changed business data; mapping aborted'; end if;
-  insert into public.osi_legacy_mappings(resource,record_id,site_id,row_sha256,evidence,approved_by,was_public,visibility_evidence) values(tab,ident,p_site_id,row_hash,p_evidence,p_approved_by,approved_public,entry->>'visibility_evidence');
-  insert into public.osi_operation_audit(site_id,resource,record_id,action,actor_type,actor_id) values(p_site_id,tab,ident,'legacy_mapping','MIGRATION_OPERATOR',p_approved_by::text);
+  insert into public.osi_legacy_mappings(resource,record_id,site_id,row_sha256,evidence,approved_by,approved_by_system,was_public,visibility_evidence) values(tab,ident,p_site_id,row_hash,p_evidence,p_approved_by,p_approved_by_system,approved_public,entry->>'visibility_evidence');
+  insert into public.osi_operation_audit(site_id,resource,record_id,action,actor_type,actor_id) values(p_site_id,tab,ident,'legacy_mapping','MIGRATION_OPERATOR',p_approved_by_system||':'||p_approved_by::text);
   mapped:=mapped+1;
  end loop;
  return jsonb_build_object('ok',true,'mapped',mapped);
 end;
 $mapping$;
-revoke all on function public.integration_map_legacy_records(uuid,jsonb,text,uuid) from public,anon,authenticated,service_role;
+revoke all on function public.integration_map_legacy_records(uuid,jsonb,text,uuid,text) from public,anon,authenticated,service_role;
 -- Intentionally no API grant. Run only through the explicitly approved operator
 -- DB connection after compatibility, counts, backups, and public links pass.
 commit;

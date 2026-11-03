@@ -91,7 +91,7 @@ psql --set ON_ERROR_STOP=1 --file supabase/migrations/20261030_integration_opera
 
 ## 명시적 기존 기록 매핑
 
-`integration_map_legacy_records(site UUID, manifest JSONB, evidence TEXT, approved_by UUID)`는 DB 소유자만 실행할 수 있습니다. `service_role`, anon, authenticated에는 실행 권한이 없습니다. 실제 기존 기록·공간 소속을 확인한 운영자만 사용합니다.
+`integration_map_legacy_records(site UUID, manifest JSONB, evidence TEXT, approved_by UUID, approved_by_system TEXT DEFAULT 'supabase-auth')`는 DB 소유자만 실행할 수 있습니다. `service_role`, anon, authenticated에는 실행 권한이 없습니다. 실제 기존 기록·공간 소속을 확인한 운영자만 사용합니다. 승인자는 `supabase-auth` 또는 `better-auth`로 구분하여 실제 확인한 사용자 UUID를 기록합니다. `supabase-auth`는 해당 `auth.users` 존재를 검사하며, `better-auth`는 운영자가 D1의 사용자·활성 HQ 멤버십과 배포 승인 근거를 직접 확인하여 evidence에 남겨야 합니다. 다른 서비스의 사용자를 기존 관리자 UUID로 바꾸거나 가상 Supabase 사용자를 만들지 않습니다. 감사기록에도 `namespace:UUID`를 남깁니다.
 
 manifest는 최대 1000개 `{resource,id,sha256}` 항목입니다. 공간을 먼저, 공간을 참조하는 기록을 나중에 나열합니다. fingerprint는 아래 표현식으로 생성합니다. 결과와 근거는 접근이 제한된 운영 매핑 파일로 보관하고 Git에 넣지 않습니다.
 
